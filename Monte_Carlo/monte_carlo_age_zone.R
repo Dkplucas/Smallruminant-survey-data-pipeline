@@ -1,4 +1,5 @@
 #!/usr/bin/env Rscript
+# Monte carlo chisq.test(..., simulate.p.value = TRUE, B = 20000) because the Expected count 5 for the Chi2 was >5
 
 suppressPackageStartupMessages({
   library(readxl)
@@ -79,11 +80,10 @@ run_monte_carlo_test <- function(data, zone_col, output_file, workbook) {
   expected_df <- cbind(AgeGroup = rownames(expected_df), expected_df)
   rownames(expected_df) <- NULL
 
-  result_text <- paste0(
-    "Age group vs ",
-    if (zone_col == "VegetationZone") "vegetation zone" else "phytogeographic zone",
-    ": Monte Carlo p-value = ",
-    format(round(test$p.value, 4), nsmall = 4)
+  summary_lines <- c(
+    paste0("=== Monte Carlo test: Age group vs ", zone_col, " ==="),
+    paste0("Chi-square statistic: ", round(test$statistic, 3)),
+    paste0("Monte Carlo p-value: ", format(round(test$p.value, 4), nsmall = 4))
   )
 
   observed_sheet <- "Observed_contingency_tables"
@@ -91,13 +91,21 @@ run_monte_carlo_test <- function(data, zone_col, output_file, workbook) {
 
   writeData(workbook, sheet = observed_sheet, x = cbind(Comparison = paste("AgeGroup vs", zone_col), observed_df), startRow = 1, startCol = 1)
   writeData(workbook, sheet = expected_sheet, x = cbind(Comparison = paste("AgeGroup vs", zone_col), expected_df), startRow = 1, startCol = 1)
-  writeData(workbook, sheet = "Summary_statistics", x = data.frame(Result = result_text), startRow = if (zone_col == "VegetationZone") 1 else 2, startCol = 1)
 
   saveWorkbook(workbook, output_file, overwrite = TRUE)
   cat("Saved results to", output_file, "\n")
+
+  list(summary = summary_lines)
 }
 
-base_dir <- normalizePath(".", winslash = "/", mustWork = TRUE)
+script_args <- commandArgs(trailingOnly = FALSE)
+file_arg <- grep("^--file=", script_args, value = TRUE)
+if (length(file_arg) > 0) {
+  base_dir <- dirname(normalizePath(sub("^--file=", "", file_arg), winslash = "/", mustWork = TRUE))
+} else {
+  base_dir <- normalizePath(getwd(), winslash = "/", mustWork = TRUE)
+}
+
 data_path <- file.path(base_dir, "data8.xlsx")
 zones_path <- file.path(base_dir, "zones.xlsx")
 output_file <- file.path(base_dir, "age_zone_monte_carlo_results.xlsx")
@@ -180,5 +188,9 @@ if (sum(!is.na(joined$VegetationZone)) == 0 || sum(!is.na(joined$Phytogeographic
   stop("No usable zone matches were found after joining the survey and zone tables.", call. = FALSE)
 }
 
-run_monte_carlo_test(joined %>% filter(!is.na(VegetationZone)), "VegetationZone", output_file, wb)
-run_monte_carlo_test(joined %>% filter(!is.na(PhytogeographicZone)), "PhytogeographicZone", output_file, wb)
+veg_summary <- run_monte_carlo_test(joined %>% filter(!is.na(VegetationZone)), "VegetationZone", output_file, wb)
+phyto_summary <- run_monte_carlo_test(joined %>% filter(!is.na(PhytogeographicZone)), "PhytogeographicZone", output_file, wb)
+
+summary_text <- c(veg_summary$summary, "", phyto_summary$summary)
+writeData(wb, sheet = "Summary_statistics", x = data.frame(Result = summary_text), startRow = 1, startCol = 1)
+saveWorkbook(wb, output_file, overwrite = TRUE)
