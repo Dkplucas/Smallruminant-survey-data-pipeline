@@ -572,7 +572,308 @@ if (length(col_strategies_adaptation) > 0) {
   cat("\n⚠ Aucune colonne 'Quelles stratégies avez-vous mises en place pour adapter votre élevage...' trouvée\n")
 }
 
-#20.---- EXPORT DES DONNEES NETTOYEES ------------------------------------------------
+#20. Rename and transform morphologiques differences column
+old_col_name_morpho <- "6.) Caractéristiques des Chèvres Métissées/Avez-vous observé des différences morphologiques entre les chèvres métissées et la race locale Djallonké ?: 1=Oui, 0=Non, 3=Aucune idee"
+new_col_name_morpho <- "6.) Caractéristiques des Chèvres Métissées/Avez-vous observé des différences morphologiques entre les chèvres métissées et la race locale Djallonké ?: 0=Non, 1=Oui"
+
+if (old_col_name_morpho %in% names(raw)) {
+  cat("\nTraitement de la colonne morphologiques...\n")
+  cat("Valeurs avant :\n")
+  print(table(raw[[old_col_name_morpho]], useNA = "ifany"))
+
+  raw <- raw %>%
+    rename(!!new_col_name_morpho := all_of(old_col_name_morpho)) %>%
+    mutate(
+      !!new_col_name_morpho := as.character(!!sym(new_col_name_morpho)),
+      !!new_col_name_morpho := str_trim(!!sym(new_col_name_morpho)),
+      !!new_col_name_morpho := case_when(
+        is.na(!!sym(new_col_name_morpho)) | !!sym(new_col_name_morpho) == "" ~ "0",
+        str_detect(str_to_lower(!!sym(new_col_name_morpho)), "^non$|^0$") ~ "0",
+        str_detect(str_to_lower(!!sym(new_col_name_morpho)), "^oui$|^1$") ~ "1",
+        str_detect(str_to_lower(!!sym(new_col_name_morpho)), "aucune.*idée|aucune.*idee") ~ "0",
+        .default = "0"
+      )
+    )
+
+  cat("✓ Colonne renommée et transformée\n")
+  cat("Valeurs après :\n")
+  print(table(raw[[new_col_name_morpho]], useNA = "ifany"))
+} else {
+  cat("\n⚠ Colonne morphologiques non trouvée\n")
+}
+
+#21. Rename and transform métis size compared to Djallonke column
+old_col_name_size <- "6.) Caractéristiques des Chèvres Métissées/Si oui quelle différence: La Taille des metis est ..... que celle des Djallonke: 1: Plus Grande, 2: Vide"
+new_col_name_size <- "6.) Caractéristiques des Chèvres Métissées/Si oui quelle différence: La Taille des metis est ..... que celle des Djallonke:0=Non, 1=Plus Grande"
+
+if (old_col_name_size %in% names(raw)) {
+  cat("\nTraitement de la colonne taille metis...\n")
+  cat("Valeurs avant :\n")
+  print(table(raw[[old_col_name_size]], useNA = "ifany"))
+
+  raw <- raw %>%
+    rename(!!new_col_name_size := all_of(old_col_name_size)) %>%
+    mutate(
+      !!new_col_name_size := as.character(!!sym(new_col_name_size)),
+      !!new_col_name_size := str_trim(!!sym(new_col_name_size)),
+      !!new_col_name_size := case_when(
+        is.na(!!sym(new_col_name_size)) | !!sym(new_col_name_size) == "" ~ "0",
+        str_detect(str_to_lower(!!sym(new_col_name_size)), "plus.*grande") ~ "1",
+        .default = "0"
+      )
+    )
+
+  cat("✓ Colonne renommée et transformée\n")
+  cat("Valeurs après :\n")
+  print(table(raw[[new_col_name_size]], useNA = "ifany"))
+} else {
+  cat("\n⚠ Colonne taille metis non trouvée\n")
+}
+
+#22. Rename and transform couleur distinction column
+old_col_name_couleur <- "6.) Caractéristiques des Chèvres Métissées/Autres traits de distinction entre metis et Djallonke/couleur"
+new_col_name_couleur <- "6.) Caractéristiques des Chèvres Métissées/Autres traits de distinction entre metis et Djallonke/couleur/0=Non, 1=Oui"
+
+if (old_col_name_couleur %in% names(raw)) {
+  cat("\nTraitement de la colonne couleur...\n")
+  cat("Valeurs avant :\n")
+  print(table(raw[[old_col_name_couleur]], useNA = "ifany"))
+
+  raw <- raw %>%
+    rename(!!new_col_name_couleur := all_of(old_col_name_couleur)) %>%
+    mutate(
+      !!new_col_name_couleur := as.character(!!sym(new_col_name_couleur)),
+      !!new_col_name_couleur := str_trim(!!sym(new_col_name_couleur)),
+      !!new_col_name_couleur := case_when(
+        is.na(!!sym(new_col_name_couleur)) | !!sym(new_col_name_couleur) == "" ~ "0",
+        .default = !!sym(new_col_name_couleur)
+      )
+    )
+
+  cat("✓ Colonne renommée et transformée\n")
+  cat("Valeurs après :\n")
+  print(table(raw[[new_col_name_couleur]], useNA = "ifany"))
+} else {
+  cat("\n⚠ Colonne couleur non trouvée\n")
+}
+
+#23. Rename and transform forme des cornes distinction column
+old_col_name_cornes <- "6.) Caractéristiques des Chèvres Métissées/Autres traits de distinction entre metis et Djallonke/forme des cornes"
+new_col_name_cornes <- "6.) Caractéristiques des Chèvres Métissées/Autres traits de distinction entre metis et Djallonke/forme des cornes/0=Non, 1=Oui"
+
+if (old_col_name_cornes %in% names(raw)) {
+  cat("\nTraitement de la colonne forme des cornes...\n")
+  cat("Valeurs avant :\n")
+  print(table(raw[[old_col_name_cornes]], useNA = "ifany"))
+
+  raw <- raw %>%
+    rename(!!new_col_name_cornes := all_of(old_col_name_cornes)) %>%
+    mutate(
+      !!new_col_name_cornes := as.character(!!sym(new_col_name_cornes)),
+      !!new_col_name_cornes := str_trim(!!sym(new_col_name_cornes)),
+      !!new_col_name_cornes := case_when(
+        is.na(!!sym(new_col_name_cornes)) | !!sym(new_col_name_cornes) == "" ~ "0",
+        .default = !!sym(new_col_name_cornes)
+      )
+    )
+
+  cat("✓ Colonne renommée et transformée\n")
+  cat("Valeurs après :\n")
+  print(table(raw[[new_col_name_cornes]], useNA = "ifany"))
+} else {
+  cat("\n⚠ Colonne forme des cornes non trouvée\n")
+}
+
+#24. Rename and transform forme des mamelles distinction column
+old_col_name_mamelles <- "6.) Caractéristiques des Chèvres Métissées/Autres traits de distinction entre metis et Djallonke/forme des mamelles"
+new_col_name_mamelles <- "6.) Caractéristiques des Chèvres Métissées/Autres traits de distinction entre metis et Djallonke/forme des mamelles/0=Non, 1=Oui"
+
+if (old_col_name_mamelles %in% names(raw)) {
+  cat("\nTraitement de la colonne forme des mamelles...\n")
+  cat("Valeurs avant :\n")
+  print(table(raw[[old_col_name_mamelles]], useNA = "ifany"))
+
+  raw <- raw %>%
+    rename(!!new_col_name_mamelles := all_of(old_col_name_mamelles)) %>%
+    mutate(
+      !!new_col_name_mamelles := as.character(!!sym(new_col_name_mamelles)),
+      !!new_col_name_mamelles := str_trim(!!sym(new_col_name_mamelles)),
+      !!new_col_name_mamelles := case_when(
+        is.na(!!sym(new_col_name_mamelles)) | !!sym(new_col_name_mamelles) == "" ~ "0",
+        .default = !!sym(new_col_name_mamelles)
+      )
+    )
+
+  cat("✓ Colonne renommée et transformée\n")
+  cat("Valeurs après :\n")
+  print(table(raw[[new_col_name_mamelles]], useNA = "ifany"))
+} else {
+  cat("\n⚠ Colonne forme des mamelles non trouvée\n")
+}
+
+#25. Rename and transform croissance performance column
+old_col_name_croissance <- "7.) Performances des métis/Croissance /Meilleure que la race Djallonke"
+new_col_name_croissance <- "7.) Performances des métis/Croissance /Meilleure que la race Djallonke/0=Non, 1=Oui"
+
+if (old_col_name_croissance %in% names(raw)) {
+  cat("\nTraitement de la colonne croissance...\n")
+  cat("Valeurs avant :\n")
+  print(table(raw[[old_col_name_croissance]], useNA = "ifany"))
+
+  raw <- raw %>%
+    rename(!!new_col_name_croissance := all_of(old_col_name_croissance)) %>%
+    mutate(
+      !!new_col_name_croissance := as.character(!!sym(new_col_name_croissance)),
+      !!new_col_name_croissance := str_trim(!!sym(new_col_name_croissance)),
+      !!new_col_name_croissance := case_when(
+        is.na(!!sym(new_col_name_croissance)) | !!sym(new_col_name_croissance) == "" ~ "0",
+        .default = !!sym(new_col_name_croissance)
+      )
+    )
+
+  cat("✓ Colonne renommée et transformée\n")
+  cat("Valeurs après :\n")
+  print(table(raw[[new_col_name_croissance]], useNA = "ifany"))
+} else {
+  cat("\n⚠ Colonne croissance non trouvée\n")
+}
+
+#26. Rename and transform croissance similaire performance column
+old_col_name_croissance_sim <- "7.) Performances des métis/Croissance /Similaire que la race Djallonke"
+new_col_name_croissance_sim <- "7.) Performances des métis/Croissance /Similaire que la race Djallonke/0=Non, 1=Oui"
+
+if (old_col_name_croissance_sim %in% names(raw)) {
+  cat("\nTraitement de la colonne croissance similaire...\n")
+  cat("Valeurs avant :\n")
+  print(table(raw[[old_col_name_croissance_sim]], useNA = "ifany"))
+
+  raw <- raw %>%
+    rename(!!new_col_name_croissance_sim := all_of(old_col_name_croissance_sim)) %>%
+    mutate(
+      !!new_col_name_croissance_sim := as.character(!!sym(new_col_name_croissance_sim)),
+      !!new_col_name_croissance_sim := str_trim(!!sym(new_col_name_croissance_sim)),
+      !!new_col_name_croissance_sim := case_when(
+        is.na(!!sym(new_col_name_croissance_sim)) | !!sym(new_col_name_croissance_sim) == "" ~ "0",
+        .default = !!sym(new_col_name_croissance_sim)
+      )
+    )
+
+  cat("✓ Colonne renommée et transformée\n")
+  cat("Valeurs après :\n")
+  print(table(raw[[new_col_name_croissance_sim]], useNA = "ifany"))
+} else {
+  cat("\n⚠ Colonne croissance similaire non trouvée\n")
+}
+
+#27. Rename and transform croissance moins bonne performance column
+old_col_name_croissance_moins <- "7.) Performances des métis/Croissance /Moins bonne que la race Djallonke"
+new_col_name_croissance_moins <- "7.) Performances des métis/Croissance /Moins bonne que la race Djallonke/0=Non, 1=Oui"
+
+if (old_col_name_croissance_moins %in% names(raw)) {
+  cat("\nTraitement de la colonne croissance moins bonne...\n")
+  cat("Valeurs avant :\n")
+  print(table(raw[[old_col_name_croissance_moins]], useNA = "ifany"))
+
+  raw <- raw %>%
+    rename(!!new_col_name_croissance_moins := all_of(old_col_name_croissance_moins)) %>%
+    mutate(
+      !!new_col_name_croissance_moins := as.character(!!sym(new_col_name_croissance_moins)),
+      !!new_col_name_croissance_moins := str_trim(!!sym(new_col_name_croissance_moins)),
+      !!new_col_name_croissance_moins := case_when(
+        is.na(!!sym(new_col_name_croissance_moins)) | !!sym(new_col_name_croissance_moins) == "" ~ "0",
+        .default = !!sym(new_col_name_croissance_moins)
+      )
+    )
+
+  cat("✓ Colonne renommée et transformée\n")
+  cat("Valeurs après :\n")
+  print(table(raw[[new_col_name_croissance_moins]], useNA = "ifany"))
+} else {
+  cat("\n⚠ Colonne croissance moins bonne non trouvée\n")
+}
+
+#28. Rename and transform résistance aux maladies meilleure performance column
+old_col_name_resistance_mieux <- "7.) Performances des métis/Résistance aux maladies /Meilleure que la race Djallonke"
+new_col_name_resistance_mieux <- "7.) Performances des métis/Résistance aux maladies /Meilleure que la race Djallonke/0=Non, 1=Oui"
+
+if (old_col_name_resistance_mieux %in% names(raw)) {
+  cat("\nTraitement de la colonne résistance aux maladies meilleure...\n")
+  cat("Valeurs avant :\n")
+  print(table(raw[[old_col_name_resistance_mieux]], useNA = "ifany"))
+
+  raw <- raw %>%
+    rename(!!new_col_name_resistance_mieux := all_of(old_col_name_resistance_mieux)) %>%
+    mutate(
+      !!new_col_name_resistance_mieux := as.character(!!sym(new_col_name_resistance_mieux)),
+      !!new_col_name_resistance_mieux := str_trim(!!sym(new_col_name_resistance_mieux)),
+      !!new_col_name_resistance_mieux := case_when(
+        is.na(!!sym(new_col_name_resistance_mieux)) | !!sym(new_col_name_resistance_mieux) == "" ~ "0",
+        .default = !!sym(new_col_name_resistance_mieux)
+      )
+    )
+
+  cat("✓ Colonne renommée et transformée\n")
+  cat("Valeurs après :\n")
+  print(table(raw[[new_col_name_resistance_mieux]], useNA = "ifany"))
+} else {
+  cat("\n⚠ Colonne résistance aux maladies meilleure non trouvée\n")
+}
+
+#29. Rename and transform résistance aux maladies similaire performance column
+old_col_name_resistance_sim <- "7.) Performances des métis/Résistance aux maladies /Similaire que la race Djallonke"
+new_col_name_resistance_sim <- "7.) Performances des métis/Résistance aux maladies /Similaire que la race Djallonke/0=Non, 1=Oui"
+
+if (old_col_name_resistance_sim %in% names(raw)) {
+  cat("\nTraitement de la colonne résistance aux maladies similaire...\n")
+  cat("Valeurs avant :\n")
+  print(table(raw[[old_col_name_resistance_sim]], useNA = "ifany"))
+
+  raw <- raw %>%
+    rename(!!new_col_name_resistance_sim := all_of(old_col_name_resistance_sim)) %>%
+    mutate(
+      !!new_col_name_resistance_sim := as.character(!!sym(new_col_name_resistance_sim)),
+      !!new_col_name_resistance_sim := str_trim(!!sym(new_col_name_resistance_sim)),
+      !!new_col_name_resistance_sim := case_when(
+        is.na(!!sym(new_col_name_resistance_sim)) | !!sym(new_col_name_resistance_sim) == "" ~ "0",
+        .default = !!sym(new_col_name_resistance_sim)
+      )
+    )
+
+  cat("✓ Colonne renommée et transformée\n")
+  cat("Valeurs après :\n")
+  print(table(raw[[new_col_name_resistance_sim]], useNA = "ifany"))
+} else {
+  cat("\n⚠ Colonne résistance aux maladies similaire non trouvée\n")
+}
+
+#30. Rename and transform résistance aux maladies moins bonne performance column
+old_col_name_resistance_moins <- "7.) Performances des métis/Résistance aux maladies /Moins bonne que la race Djallonke"
+new_col_name_resistance_moins <- "7.) Performances des métis/Résistance aux maladies /Moins bonne que la race Djallonke/0=Non, 1=Oui"
+
+if (old_col_name_resistance_moins %in% names(raw)) {
+  cat("\nTraitement de la colonne résistance aux maladies moins bonne...\n")
+  cat("Valeurs avant :\n")
+  print(table(raw[[old_col_name_resistance_moins]], useNA = "ifany"))
+
+  raw <- raw %>%
+    rename(!!new_col_name_resistance_moins := all_of(old_col_name_resistance_moins)) %>%
+    mutate(
+      !!new_col_name_resistance_moins := as.character(!!sym(new_col_name_resistance_moins)),
+      !!new_col_name_resistance_moins := str_trim(!!sym(new_col_name_resistance_moins)),
+      !!new_col_name_resistance_moins := case_when(
+        is.na(!!sym(new_col_name_resistance_moins)) | !!sym(new_col_name_resistance_moins) == "" ~ "0",
+        .default = !!sym(new_col_name_resistance_moins)
+      )
+    )
+
+  cat("✓ Colonne renommée et transformée\n")
+  cat("Valeurs après :\n")
+  print(table(raw[[new_col_name_resistance_moins]], useNA = "ifany"))
+} else {
+  cat("\n⚠ Colonne résistance aux maladies moins bonne non trouvée\n")
+}
+
+#31.---- EXPORT DES DONNEES NETTOYEES ------------------------------------------------
 cat("\n=== EXPORT DES DONNEES NETTOYEES ===\n")
 
 # Exporter en Excel

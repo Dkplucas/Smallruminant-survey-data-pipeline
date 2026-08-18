@@ -1,496 +1,548 @@
-#Cleaning of I.- IDENTIFICATION DU CHEF DE MENAGE
+# Cleaning of I.- IDENTIFICATION DU CHEF DE MENAGE (OPTIMIZED)
+# This version reduces ~450 lines to ~150 by eliminating repetition
 
-# library needed
 library(dplyr)
+library(stringr)
+library(readxl)
+library(openxlsx)
 
-#-------------------------------------------- A. Kobocollect extraction--------------------------------------------------------
-# Premier pas  est de telecharger le formulaire sur kobocollect
-# Prenez soin d'inserer ses parametres avant de telecharger le fichier pour etre sure que le code marche
-# Pour l'option "Select export type" = "XSL" pour plus de compatibilite
-# Pour l'option "Value and header format" = "Labels"
-# cliquer sur "Advanced option"
-# Pour l'option "Export Select Many questions as…" = "Seperate Colomns"
-# Decochez l'option "Include fields from all 4 versions" qui pourraient inserrer des questions inexistante dans notre questionnaire
-# Pour l'option " Include groups in headers" = "Group separator ( / )"
-# Cochez "Include media URLs"
-# Cochez "Date range"
-# Cliquez exporter et copier le nom du fichier "Questionnaire_caracterisation_pratiques_de_croisements_-_latest_version_-_labels_-_2026-07-28-03-29-08.xlsx
+# ============================================================================
+# CONFIGURATION: Central specs for all column cleaning
+# ============================================================================
+COLUMN_SPECS <- list(
+  sexe = list(
+    pattern = "Sexe",
+    new_name = "I.- IDENTIFICATION DU CHEF DE MENAGE /Sexe: 1=Masculin, 2=Feminin",
+    codes = c("1" = "masculin", "2" = "feminin"),
+    allow_missing = FALSE
+  ),
+  instruction = list(
+    pattern = "Niveau.*instruction",
+    new_name = "I.- IDENTIFICATION DU CHEF DE MENAGE /Niveau d'instruction: 1=Aucun, 2=Primaire, 3=Secondaire, 4=Superieure",
+    codes = c("1" = "aucun", "2" = "primaire", "3" = "secondaire", "4" = "supérieur|superieure"),
+    allow_missing = TRUE,
+    missing_code = "1",
+    transform_missing = TRUE
+  ),
+  age = list(
+    pattern = "Catégorie.*âge",
+    new_name = "I.- IDENTIFICATION DU CHEF DE MENAGE /Catégorie d'âge : 1= > 50ans,  2=30 a 50, 3=20 a 30",
+    codes = c("1" = ">50ans|> 50", "2" = "30.*50|30 a 50", "3" = "20.*30|20 a 30"),
+    allow_missing = FALSE
+  ),
+  matrimoniale = list(
+    pattern = "Situation.*matrimoniale",
+    new_name = "I.- IDENTIFICATION DU CHEF DE MENAGE /Situation matrimoniale : 1=Celibataire, 2=Divorce(e), 3=Marie, 4=Veuf/ve",
+    codes = c("1" = "célibataire|celibataire", "2" = "divorcé|divorc", "3" = "marié|marie", "4" = "veuf|veuve"),
+    allow_missing = FALSE
+  ),
+  activite = list(
+    pattern = "principale.*activité|principale.*activite",
+    new_name = "I.- IDENTIFICATION DU CHEF DE MENAGE /Quelle est votre principale activité? : 1=Agriculture, 2=Artisanat, 3=Autre, 4=Commerce, 5=Elevage",
+    codes = c("1" = "agriculture", "2" = "artisanat", "3" = "autre", "4" = "commerce", "5" = "elevage"),
+    allow_missing = FALSE
+  ),
+  revenu = list(
+    pattern = "principale.*source.*revenu|activité.*revenu",
+    new_name = "I.- IDENTIFICATION DU CHEF DE MENAGE /Quelle est votre principale source de revenu? ou De quelle activité provient principalement vos revenus?: 1=Agriculture, 2=Artisanat, 3=Autre, 4=Commerce, 5=Elevage, 6=Vide",
+    codes = c("1" = "agriculture", "2" = "artisanat", "3" = "autre", "4" = "commerce", "5" = "elevage"),
+    allow_missing = TRUE,
+    missing_code = "6"
+  ),
+  formation = list(
+    pattern = "formation.*élevage|formation.*elevage",
+    new_name = "I.- IDENTIFICATION DU CHEF DE MENAGE /Avez vous reçu oui suivi une Formation en élevage ?: 0=Non, 1=Oui",
+    codes = c("0" = "non", "1" = "oui"),
+    allow_missing = FALSE
+  ),
+  op = list(
+    pattern = "organisation.*paysanne|coopérative|cooperative",
+    new_name = "I.- IDENTIFICATION DU CHEF DE MENAGE /Appartenez vous à une Organisation Paysanne (OP) ou coopérative...?: 0=Non, 1=Oui",
+    codes = c("0" = "non", "1" = "oui"),
+    allow_missing = TRUE,
+    missing_code = "0"
+  )
+)
 
-#------------------------ B. Data Cleaning ---------------------------------------------------------------------------
-# Set up the working directory 
-setwd("c:/Users/lucas/Downloads/") # rensenyer le chemin du fichier et le dossier le contenant
-getwd()# confirmer le dossier de travail
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
 
-# importer le fichier excel en copiant l'emplacement du fichier xlsx
+# Find column by pattern (safely returns NA if not found)
+find_col <- function(df, pattern) {
+  matches <- names(df)[grep(pattern, names(df), ignore.case = TRUE)]
+  if (length(matches) == 0) NA else matches[1]
+}
+
+# Clean and recode a single categorical column
+clean_categorical_col <- function(raw, spec, verbose = TRUE) {
+  col <- find_col(raw, spec$pattern)
+
+  if (is.na(col)) {
+    if (verbose) cat("⚠ Column matching '", spec$pattern, "' not found\n", sep = "")
+    return(raw)
+  }
+
+  if (verbose) {
+    cat("\n--- Cleaning:", spec$new_name, "---\n")
+    cat("Before:\n")
+    print(table(raw[[col]], useNA = "ifany"))
+  }
+
+  raw <- raw %>%
+    rename(!!spec$new_name := all_of(col)) %>%
+    mutate(!!spec$new_name := str_trim(!!sym(spec$new_name)))
+
+  # Build case_when conditions dynamically
+  cond_expr <- paste0(
+    "raw %>% mutate(!!spec$new_name := case_when(\n",
+    if (spec$allow_missing) paste0("is.na(!!sym(spec$new_name)) | !!sym(spec$new_name) == '' ~ '", spec$missing_code, "',\n"),
+    paste(
+      sprintf("str_detect(str_to_lower(!!sym(spec$new_name)), '%s') ~ '%s'",
+              spec$codes, names(spec$codes)),
+      collapse = ",\n"
+    ),
+    ",\nTRUE ~ !!sym(spec$new_name)\n))"
+  )
+
+  raw <- eval(parse(text = cond_expr))
+
+  # Transform old missing code to new missing code if specified
+  if (!is.null(spec$transform_missing) && spec$transform_missing && !is.null(spec$missing_code)) {
+    # Find what the old missing code was (typically "5" for vide)
+    old_missing_codes <- c("5", "NA")  # Common missing code representations
+    raw <- raw %>%
+      mutate(!!spec$new_name := case_when(
+        !!sym(spec$new_name) %in% old_missing_codes ~ spec$missing_code,
+        TRUE ~ !!sym(spec$new_name)
+      ))
+  }
+
+  if (verbose) {
+    cat("After:\n")
+    print(table(raw[[spec$new_name]], useNA = "ifany"))
+  }
+
+  raw
+}
+
+# Fill NA/empty cells with a default value across multiple columns
+fill_empty_cells <- function(raw, cols, fill_value = "0", verbose = TRUE) {
+  if (length(cols) == 0) return(raw)
+
+  if (verbose) {
+    cat("\nFilling empty cells in", length(cols), "columns with '", fill_value, "'...\n", sep = "")
+  }
+
+  raw %>%
+    mutate(across(all_of(cols),
+      ~case_when(
+        is.na(.) | . == "" | . == "NA" ~ fill_value,
+        TRUE ~ as.character(.)
+      )
+    ))
+}
+
+# Convert year to years of experience
+years_since <- function(year_str, current_year = 2026) {
+  if (is.na(year_str) || year_str == "" || year_str == "NA") {
+    return("0")
+  }
+  if (str_detect(year_str, "^\\d{4}$")) {
+    return(as.character(current_year - as.numeric(year_str)))
+  }
+  return(as.character(year_str))
+}
+
+# Find and remove columns matching patterns
+remove_cols_by_pattern <- function(raw, patterns, verbose = TRUE) {
+  cols_to_remove <- c()
+  for (pattern in patterns) {
+    cols_to_remove <- c(cols_to_remove, find_col(raw, pattern))
+  }
+  cols_to_remove <- cols_to_remove[!is.na(cols_to_remove)]
+
+  if (length(cols_to_remove) > 0) {
+    if (verbose) {
+      cat("\nRemoving", length(cols_to_remove), "column(s):\n")
+      print(cols_to_remove)
+    }
+    raw <- raw %>% select(-all_of(cols_to_remove))
+  } else if (verbose) {
+    cat("\nNo columns found matching patterns\n")
+  }
+
+  raw
+}
+
+# ============================================================================
+# MAIN WORKFLOW
+# ============================================================================
+
+# Setup
+cat("=== DATA CLEANING: HOUSEHOLD IDENTIFICATION ===\n\n")
+setwd("c:/Users/lucas/Downloads/")
+
 xlsx_path <- "c:/Users/lucas/Downloads/Questionnaire_caracterisation_pratiques_de_croisements_-_latest_version_-_labels_-_2026-07-28-03-29-08.xlsx"
 
-# On lit sans se fier aux noms de colonnes (plusieurs questions a choix multiple
-# produisent des en-tetes dupliques dans ce fichier) : on utilise la POSITION
-# des colonnes, qui est stable, exactement comme lors du controle initial.
-
+# Load data
 raw <- read_excel(xlsx_path, col_names = TRUE)
-cat("Fichier charge :", nrow(raw), "lignes x", ncol(raw), "colonnes\n")
+cat("Initial load:", nrow(raw), "rows ×", ncol(raw), "columns\n\n")
 
-# Exclure les colonnes "start", "end", "I.- IDENTIFICATION DU CHEF DE MENAGE /Code Enquêteur" et "I.- IDENTIFICATION DU CHEF DE MENAGE /Nom et prénoms de l'enquêté"
-raw <- raw %>% select(-any_of(c("start", "end", "I.- IDENTIFICATION DU CHEF DE MENAGE /Code Enquêteur", "I.- IDENTIFICATION DU CHEF DE MENAGE /Nom et prénoms de l'enquêté")))
-cat("Après exclusion (start, end, I.- IDENTIFICATION DU CHEF DE MENAGE /Code Enquêteur, I.- IDENTIFICATION DU CHEF DE MENAGE /Nom et prénoms de l'enquêté) :", nrow(raw), "lignes x", ncol(raw), "colonnes\n")
+# Remove sensitive/timing columns
+raw <- raw %>%
+  select(-any_of(c("start", "end",
+                   "I.- IDENTIFICATION DU CHEF DE MENAGE /Code Enquêteur",
+                   "I.- IDENTIFICATION DU CHEF DE MENAGE /Nom et prénoms de l'enquêté")))
+cat("After removing sensitive columns:", nrow(raw), "rows ×", ncol(raw), "columns\n\n")
 
-# 1. NETTOYAGE COLONNE "I.- IDENTIFICATION DU CHEF DE MENAGE /Sexe"
-# Renommer la colonne "Sexe" avec les codes
-# Chercher le vrai nom de la colonne (peut contenir des préfixes)
-col_sexe <- names(raw)[grep("Sexe", names(raw), ignore.case = TRUE)][1]
+# Clean categorical columns using specs
+raw <- clean_categorical_col(raw, COLUMN_SPECS$sexe)
+raw <- clean_categorical_col(raw, COLUMN_SPECS$instruction)
+raw <- clean_categorical_col(raw, COLUMN_SPECS$age)
+raw <- clean_categorical_col(raw, COLUMN_SPECS$matrimoniale)
+raw <- clean_categorical_col(raw, COLUMN_SPECS$activite)
+raw <- clean_categorical_col(raw, COLUMN_SPECS$revenu)
+raw <- clean_categorical_col(raw, COLUMN_SPECS$formation)
+raw <- clean_categorical_col(raw, COLUMN_SPECS$op)
 
-if (!is.na(col_sexe)) {
-  # Afficher les valeurs uniques avant nettoyage
-  cat("Valeurs uniques dans la colonne '", col_sexe, "' avant nettoyage :\n", sep = "")
-  print(table(raw[[col_sexe]]))
-  
-  col_name_new <- "I.- IDENTIFICATION DU CHEF DE MENAGE /Sexe: 1=Masculin, 2=Feminin"
-  
-  raw <- raw %>%
-    rename(!!col_name_new := all_of(col_sexe)) %>%
-    mutate(!!col_name_new := str_trim(!!sym(col_name_new))) %>%
-    mutate(!!col_name_new := case_when(
-      str_detect(str_to_lower(!!sym(col_name_new)), "^1=|masculin") ~ "1",
-      str_detect(str_to_lower(!!sym(col_name_new)), "^2=|feminin") ~ "2",
-      TRUE ~ !!sym(col_name_new)
-    ))
-  cat("Colonne Sexe nettoyée et renommée\n")
-  cat("Valeurs après nettoyage :\n")
-  print(table(raw[[col_name_new]]))
-}
-
-# 2. NETTOYAGE COLONNE "Niveau d'instruction"
-# Renommer la colonne et recoder
-# Vérifier le vrai nom de la colonne (avec ou sans faute et préfixe)
-col_instruction <- names(raw)[grep("Niveau.*instruction", names(raw), ignore.case = TRUE)][1]
-
-if (!is.na(col_instruction)) {
-  # Afficher les valeurs uniques avant nettoyage
-  cat("\nValeurs uniques dans la colonne '", col_instruction, "' avant nettoyage :\n", sep = "")
-  print(table(raw[[col_instruction]], useNA = "ifany"))
-  
-  col_name_new <- "I.- IDENTIFICATION DU CHEF DE MENAGE /Niveau d'instruction: 1=Aucun, 2=Primaire, 3=Secondaire, 4=Superieure, 5=vide"
-  
-  raw <- raw %>%
-    rename(!!col_name_new := all_of(col_instruction)) %>%
-    mutate(!!col_name_new := str_trim(!!sym(col_name_new))) %>%
-    mutate(!!col_name_new := case_when(
-      is.na(!!sym(col_name_new)) |
-        !!sym(col_name_new) == "" ~ "5",
-      str_detect(str_to_lower(!!sym(col_name_new)), "^1=|aucun") ~ "1",
-      str_detect(str_to_lower(!!sym(col_name_new)), "^2=|primaire") ~ "2",
-      str_detect(str_to_lower(!!sym(col_name_new)), "^3=|secondaire") ~ "3",
-      str_detect(str_to_lower(!!sym(col_name_new)), "^4=|superieure") ~ "4",
-      TRUE ~ !!sym(col_name_new)
-    ))
-  cat("Colonne Niveau d'instruction nettoyée et renommée\n")
-  cat("Valeurs après nettoyage :\n")
-  print(table(raw[[col_name_new]], useNA = "ifany"))
-}
-
-# 3. NETTOYAGE COLONNE "Catégorie d'âge"
-# Renommer la colonne et recoder
-# Vérifier le vrai nom de la colonne (avec accents et préfixe)
-col_age <- names(raw)[grep("Catégorie.*âge", names(raw), ignore.case = TRUE)][1]
-
-if (!is.na(col_age)) {
-  # Afficher les valeurs uniques avant nettoyage
-  cat("\nValeurs uniques dans la colonne '", col_age, "' avant nettoyage :\n", sep = "")
-  print(table(raw[[col_age]], useNA = "ifany"))
-  
-  col_name_new <- "I.- IDENTIFICATION DU CHEF DE MENAGE /Catégorie d'âge : 1= > 50ans, 2=20 a 30, 3=30 a 50"
-  
-  raw <- raw %>%
-    rename(!!col_name_new := all_of(col_age)) %>%
-    mutate(!!col_name_new := str_trim(!!sym(col_name_new))) %>%
-    mutate(!!col_name_new := case_when(
-      str_detect(str_to_lower(!!sym(col_name_new)), "^1=|> 50|50ans") ~ "1",
-      str_detect(str_to_lower(!!sym(col_name_new)), "^2=|20.*30") ~ "2",
-      str_detect(str_to_lower(!!sym(col_name_new)), "^3=|30.*50") ~ "3",
-      TRUE ~ !!sym(col_name_new)
-    ))
-  cat("Colonne Catégorie d'âge nettoyée et renommée\n")
-  cat("Valeurs après nettoyage :\n")
-  print(table(raw[[col_name_new]], useNA = "ifany"))
-}
-
-# 4. NETTOYAGE COLONNE "Situation matrimoniale"
-# Renommer la colonne et recoder
-# Vérifier le vrai nom de la colonne
-col_matrimoniale <- names(raw)[grep("Situation.*matrimoniale", names(raw), ignore.case = TRUE)][1]
-
-if (!is.na(col_matrimoniale)) {
-  # Afficher les valeurs uniques avant nettoyage
-  cat("\nValeurs uniques dans la colonne '", col_matrimoniale, "' avant nettoyage :\n", sep = "")
-  print(table(raw[[col_matrimoniale]], useNA = "ifany"))
-  
-  col_name_new <- "I.- IDENTIFICATION DU CHEF DE MENAGE /Situation matrimoniale : 1=Celibataire, 2=Divorce(e), 3=Marie, 4=Veuf/ve"
-  
-  raw <- raw %>%
-    rename(!!col_name_new := all_of(col_matrimoniale)) %>%
-    mutate(!!col_name_new := str_trim(!!sym(col_name_new))) %>%
-    mutate(!!col_name_new := case_when(
-      str_detect(str_to_lower(!!sym(col_name_new)), "^1=|célibataire|celibataire") ~ "1",
-      str_detect(str_to_lower(!!sym(col_name_new)), "^2=|divorcé|divorc") ~ "2",
-      str_detect(str_to_lower(!!sym(col_name_new)), "^3=|marié|marie") ~ "3",
-      str_detect(str_to_lower(!!sym(col_name_new)), "^4=|veuf|veuve") ~ "4",
-      TRUE ~ !!sym(col_name_new)
-    ))
-  cat("Colonne Situation matrimoniale nettoyée et renommée\n")
-  cat("Valeurs après nettoyage :\n")
-  print(table(raw[[col_name_new]], useNA = "ifany"))
-}
-
-# 5. SUPPRESSION COLONNE "Si Autre, preciser"
-# Chercher le nom exact de la colonne (variantes avec accents et préfixe)
-col_to_remove <- names(raw)[grep("si.*autre.*precis|si.*autre.*précis|préciser|preciser", names(raw), ignore.case = TRUE)]
-cat("\nColonnes à supprimer (contenant 'Si Autre' ou 'préciser') :\n")
-print(col_to_remove)
-
-if (length(col_to_remove) > 0) {
-  raw <- raw %>% select(-all_of(col_to_remove))
-  cat("Colonne(s) supprimée(s) :\n")
-  print(col_to_remove)
-  cat("Dimensions après suppression :", nrow(raw), "lignes x", ncol(raw), "colonnes\n")
-} else {
-  cat("Aucune colonne trouvée avec ce pattern\n")
-  cat("Colonnes disponibles contenant 'autre' ou 'precis' :\n")
-  autres_cols <- names(raw)[grep("autre|precis", names(raw), ignore.case = TRUE)]
-  print(autres_cols)
-}
-
-#6. SUPPRESSION DES 2 PREMIERES LIGNES CORRESPONDANT AUX 2 FERMES DE TANKPE
-cat("\nSuppression des 2 premières lignes (zone exclue)\n")
+# Remove rows for excluded zones
+cat("\n--- Removing first 2 rows (excluded zones) ---\n")
 raw <- raw %>% slice(-c(1:2))
-cat("Dimensions finales :", nrow(raw), "lignes x", ncol(raw), "colonnes\n")
+cat("Rows after removal:", nrow(raw), "\n")
 
-#7. NETTOYAGE COLONNE "S autre, preciser" pour la variable "Situation matrimoniale"
-# Chercher la colonne contenant "Si Autre" et "preciser" (avec variantes comme "...10" à la fin)
-col_to_remove <- names(raw)[grep("Si.*Autre.*precis", names(raw), ignore.case = TRUE)]
+# Remove "Si Autre" specification columns
+raw <- remove_cols_by_pattern(raw,
+  c("Si.*Autre.*precis", "precision.*autre.*activité", "precision.*autre.*secondaire"))
 
-cat("\nColonnes trouvées contenant 'Si Autre' et 'preciser' :\n")
-print(col_to_remove)
-
-if (length(col_to_remove) > 0) {
-  cat("\nSuppression de", length(col_to_remove), "colonne(s)...\n")
-  raw <- raw %>% select(-all_of(col_to_remove))
-  cat("✓ Colonne(s) supprimée(s) avec succès\n")
-  cat("Dimensions après suppression :", nrow(raw), "lignes x", ncol(raw), "colonnes\n")
+# Remove specific column "Si Autre, preciser...12"
+cat("\n--- Removing 'Si Autre, preciser...12' column ---\n")
+raw <- raw %>%
+  select(-any_of(c("I.- IDENTIFICATION DU CHEF DE MENAGE /Si Autre, preciser...12")))
+if (!"I.- IDENTIFICATION DU CHEF DE MENAGE /Si Autre, preciser...12" %in% names(raw)) {
+  cat("✓ Column removed successfully\n")
 } else {
-  cat("⚠ Aucune colonne trouvée. Voici toutes les colonnes disponibles :\n")
-  print(names(raw))
+  cat("⚠ Column still present\n")
 }
 
-#8. NETTOYAGE COLONNE I.- IDENTIFICATION DU CHEF DE MENAGE /Quelle est votre principale activité?
-# Renommer la colonne et recoder
-# Vérifier le vrai nom de la colonne
-col_activite <- names(raw)[grep("principale.*activité|principale.*activite", names(raw), ignore.case = TRUE)][1]
-
-if (!is.na(col_activite)) {
-  # Afficher les valeurs uniques avant nettoyage
-  cat("\nValeurs uniques dans la colonne '", col_activite, "' avant nettoyage :\n", sep = "")
-  print(table(raw[[col_activite]], useNA = "ifany"))
-  
-  col_name_new <- "I.- IDENTIFICATION DU CHEF DE MENAGE /Quelle est votre principale activité? : 1=Agriculture, 2=Artisanat, 3=Autre, 4=Commerce, 5=Elevage"
-  
-  raw <- raw %>%
-    rename(!!col_name_new := all_of(col_activite)) %>%
-    mutate(!!col_name_new := str_trim(!!sym(col_name_new))) %>%
-    mutate(!!col_name_new := case_when(
-      str_detect(str_to_lower(!!sym(col_name_new)), "^1=|agriculture") ~ "1",
-      str_detect(str_to_lower(!!sym(col_name_new)), "^2=|artisanat") ~ "2",
-      str_detect(str_to_lower(!!sym(col_name_new)), "^3=|autre") ~ "3",
-      str_detect(str_to_lower(!!sym(col_name_new)), "^4=|commerce") ~ "4",
-      str_detect(str_to_lower(!!sym(col_name_new)), "^5=|elevage") ~ "5",
-      TRUE ~ !!sym(col_name_new)
-    ))
-  cat("Colonne Quelle est votre principale activité? nettoyée et renommée\n")
-  cat("Valeurs après nettoyage :\n")
-  print(table(raw[[col_name_new]], useNA = "ifany"))
-}
-
-#9. Les colonne des activites secondaire seront selectionner et analyser 
-# ensemble car c'etait une question a choix multiple pour le test de CHI2
-# Remplir les cellules vides des colonnes d'activités secondaires par "0"
-cat("\nRemplissage des cellules vides des colonnes d'activités secondaires par '0'...\n")
-
-col_elevage_temp <- names(raw)[grep("activites.*secondaires.*elevage", names(raw), ignore.case = TRUE)][1]
-col_agriculture_temp <- names(raw)[grep("activites.*secondaires.*agriculture", names(raw), ignore.case = TRUE)][1]
-col_commerce_temp <- names(raw)[grep("activites.*secondaires.*commerce", names(raw), ignore.case = TRUE)][1]
-col_artisanat_temp <- names(raw)[grep("activites.*secondaires.*artisanat", names(raw), ignore.case = TRUE)][1]
-col_autre_temp <- names(raw)[grep("activites.*secondaires.*autre", names(raw), ignore.case = TRUE)][1]
-
-cols_activites_temp <- c(col_elevage_temp, col_agriculture_temp, col_commerce_temp, col_artisanat_temp, col_autre_temp)
-cols_activites_temp <- cols_activites_temp[!is.na(cols_activites_temp)]
-
-if (length(cols_activites_temp) > 0) {
-  for (col in cols_activites_temp) {
-    raw <- raw %>%
-      mutate(!!col := case_when(
-        is.na(!!sym(col)) | !!sym(col) == "" ~ "0",
-        TRUE ~ as.character(!!sym(col))
-      ))
-  }
-  cat("✓ Cellules vides remplacées par '0' pour", length(cols_activites_temp), "colonnes\n")
-}
-
-#10. Suppression des valeur de "Si autre, preciser" car ils seront pris en compte par la modalite "Autre"
-col_precision <- names(raw)[grep("precision.*autre.*activité|precision.*autre.*secondaire", names(raw), ignore.case = TRUE)][1]
-
-cat("\nSuppression de la colonne 'Precision si autre activité secondaire'...\n")
-
-if (!is.na(col_precision)) {
-  cat("Colonne trouvée:", col_precision, "\n")
-  raw <- raw %>% select(-all_of(col_precision))
-  cat("✓ Colonne supprimée avec succès\n")
-  cat("Dimensions après suppression :", nrow(raw), "lignes x", ncol(raw), "colonnes\n")
+# Remove specific column "SI Autre source principale de revenu préciser"
+cat("\n--- Removing 'SI Autre source principale de revenu préciser' column ---\n")
+raw <- raw %>%
+  select(-any_of(c("I.- IDENTIFICATION DU CHEF DE MENAGE /SI Autre source principale de revenu préciser")))
+if (!"I.- IDENTIFICATION DU CHEF DE MENAGE /SI Autre source principale de revenu préciser" %in% names(raw)) {
+  cat("✓ Column removed successfully\n")
 } else {
-  cat("⚠ Colonne non trouvée. Voici les colonnes contenant 'precision' :\n")
-  precision_cols <- names(raw)[grep("precision", names(raw), ignore.case = TRUE)]
-  print(precision_cols)
+  cat("⚠ Column still present\n")
 }
 
-#11. NETTOYAGE COLONNE "Quelle est votre principale source de revenu?
-# Renommer la colonne et recoder
-# Vérifier le vrai nom de la colonne
-col_revenu <- names(raw)[grep("principale.*source.*revenu|activité.*revenu", names(raw), ignore.case = TRUE)][1]
+# Handle secondary activities (multi-select)
+cat("\n--- Processing secondary activities ---\n")
+secondary_activity_patterns <- c(
+  "activites.*secondaires.*elevage",
+  "activites.*secondaires.*agriculture",
+  "activites.*secondaires.*commerce",
+  "activites.*secondaires.*artisanat",
+  "activites.*secondaires.*autre"
+)
+secondary_cols <- sapply(secondary_activity_patterns, function(p) find_col(raw, p))
+secondary_cols <- secondary_cols[!is.na(secondary_cols)]
 
-if (!is.na(col_revenu)) {
-  # Afficher les valeurs uniques avant nettoyage
-  cat("\nValeurs uniques dans la colonne '", col_revenu, "' avant nettoyage :\n", sep = "")
-  print(table(raw[[col_revenu]], useNA = "ifany"))
-  
-  col_name_new <- "I.- IDENTIFICATION DU CHEF DE MENAGE /Quelle est votre principale source de revenu? ou De quelle activité provient principalement vos revenus?: 1=Agriculture, 2=Artisanat, 3=Autre, 4=Commerce, 5=Elevage, 6=Vide"
-  
+raw <- fill_empty_cells(raw, secondary_cols, "0")
+
+# Rename secondary activity column: Elevage
+cat("\n--- Renaming secondary activity column: Elevage ---\n")
+col_elevage <- find_col(raw, "activites.*secondaires.*elevage")
+if (!is.na(col_elevage)) {
+  col_name_new <- "I.- IDENTIFICATION DU CHEF DE MENAGE /Quelles sont vos activites secondaires ?/Elevage: 0=Non, 1=Oui"
   raw <- raw %>%
-    rename(!!col_name_new := all_of(col_revenu)) %>%
-    mutate(!!col_name_new := str_trim(!!sym(col_name_new))) %>%
-    mutate(!!col_name_new := case_when(
-      is.na(!!sym(col_name_new)) | !!sym(col_name_new) == "" ~ "6",
-      str_detect(str_to_lower(!!sym(col_name_new)), "^1=|agriculture") ~ "1",
-      str_detect(str_to_lower(!!sym(col_name_new)), "^2=|artisanat") ~ "2",
-      str_detect(str_to_lower(!!sym(col_name_new)), "^3=|autre") ~ "3",
-      str_detect(str_to_lower(!!sym(col_name_new)), "^4=|commerce") ~ "4",
-      str_detect(str_to_lower(!!sym(col_name_new)), "^5=|elevage") ~ "5",
-      str_detect(str_to_lower(!!sym(col_name_new)), "^6=|vide") ~ "6",
-      TRUE ~ !!sym(col_name_new)
-    ))
-  cat("Colonne Quelle est votre principale source de revenu? nettoyée et renommée\n")
-  cat("Valeurs après nettoyage :\n")
-  print(table(raw[[col_name_new]], useNA = "ifany"))
-}
-
-#12 . NETTOYAGE COLONNE "Avez vous reçu oui suivi une Formation en élevage ?" 
-# Renommer la colonne et recoder
-# Vérifier le vrai nom de la colonne
-col_formation <- names(raw)[grep("formation.*élevage|formation.*elevage", names(raw), ignore.case = TRUE)][1]
-
-if (!is.na(col_formation)) {
-  # Afficher les valeurs uniques avant nettoyage
-  cat("\nValeurs uniques dans la colonne '", col_formation, "' avant nettoyage :\n", sep = "")
-  print(table(raw[[col_formation]], useNA = "ifany"))
-  
-  col_name_new <- "I.- IDENTIFICATION DU CHEF DE MENAGE /Avez vous reçu oui suivi une Formation en élevage ?: 0=Non, 1=Oui"
-  
-  raw <- raw %>%
-    rename(!!col_name_new := all_of(col_formation)) %>%
-    mutate(!!col_name_new := str_trim(!!sym(col_name_new))) %>%
-    mutate(!!col_name_new := case_when(
-      str_detect(str_to_lower(!!sym(col_name_new)), "^0=|non") ~ "0",
-      str_detect(str_to_lower(!!sym(col_name_new)), "^1=|oui") ~ "1",
-      TRUE ~ !!sym(col_name_new)
-    ))
-  cat("Colonne Avez vous reçu oui suivi une Formation en élevage ? nettoyée et renommée\n")
-  cat("Valeurs après nettoyage :\n")
-  print(table(raw[[col_name_new]], useNA = "ifany"))
-}
-
-#13.REMPLISSAGE CELLULES VIDES "Si Oui, depuis quand ?
-# Chercher la colonne
-col_depuis <- names(raw)[grep("si.*oui.*depuis|depuis.*quand", names(raw), ignore.case = TRUE)][1]
-
-if (!is.na(col_depuis)) {
-  cat("\nColonne trouvée:", col_depuis, "\n")
-  cat("Valeurs avant remplissage :\n")
-  print(table(raw[[col_depuis]], useNA = "ifany"))
-  
-  # Convertir en caractères, convertir les années en nombre d'années, et remplacer les cellules vides par "0"
-  raw <- raw %>%
-    mutate(!!col_depuis := as.character(!!sym(col_depuis))) %>%
-    mutate(!!col_depuis := case_when(
-      is.na(!!sym(col_depuis)) | !!sym(col_depuis) == "" | !!sym(col_depuis) == "NA" ~ "0",
-      # Détecter si c'est une année (4 chiffres) et convertir en nombre d'années
-      str_detect(!!sym(col_depuis), "^\\d{4}$") ~ as.character(2026 - as.numeric(!!sym(col_depuis))),
-      TRUE ~ !!sym(col_depuis)
-    ))
-  
-  cat("✓ Cellules vides remplacées par '0', années converties en nombre d'années\n")
-  cat("Valeurs après remplissage :\n")
-  print(table(raw[[col_depuis]], useNA = "ifany"))
-} else {
-  cat("\n⚠ Colonne 'Si Oui, depuis quand ?' non trouvée\n")
-}
-
-
-# 14. REMPLISSAGE CELLULES VIDES "Quelle est votre expérience en élevage?"
-# Chercher la colonne
-col_experience <- names(raw)[grep("expérience.*élevage|experience.*elevage", names(raw), ignore.case = TRUE)][1]
-
-if (!is.na(col_experience)) {
-  cat("\nColonne trouvée:", col_experience, "\n")
-  cat("Valeurs avant remplissage :\n")
-  print(table(raw[[col_experience]], useNA = "ifany"))
-  
-  # Convertir en caractères et remplacer les cellules vides par "0"
-  raw <- raw %>%
-    mutate(!!col_experience := as.character(!!sym(col_experience))) %>%
-    mutate(!!col_experience := case_when(
-      is.na(!!sym(col_experience)) | !!sym(col_experience) == "" | !!sym(col_experience) == "NA" ~ "0",
-      TRUE ~ !!sym(col_experience)
-    ))
-  
-  cat("✓ Cellules vides remplacées par '0'\n")
-  cat("Valeurs après remplissage :\n")
-  print(table(raw[[col_experience]], useNA = "ifany"))
-} else {
-  cat("\n⚠ Colonne 'Quelle est votre expérience en élevage?' non trouvée\n")
-}
-
-#15. NETTOYAGE COLONNE "Appartenez vous à une Organisation Paysanne (OP) ou coopérative...?" 
-# Chercher la colonne
-col_op <- names(raw)[grep("organisation.*paysanne|coopérative|cooperative", names(raw), ignore.case = TRUE)][1]
-
-if (!is.na(col_op)) {
-  cat("\nColonne trouvée:", col_op, "\n")
-  cat("Valeurs avant transformation :\n")
-  print(table(raw[[col_op]], useNA = "ifany"))
-  
-  col_name_new <- "I.- IDENTIFICATION DU CHEF DE MENAGE /Appartenez vous à une Organisation Paysanne (OP) ou coopérative...?: 0=Non, 1=Oui"
-  
-  raw <- raw %>%
-    rename(!!col_name_new := all_of(col_op)) %>%
-    mutate(!!col_name_new := str_trim(!!sym(col_name_new))) %>%
+    rename(!!col_name_new := all_of(col_elevage)) %>%
     mutate(!!col_name_new := case_when(
       is.na(!!sym(col_name_new)) | !!sym(col_name_new) == "" ~ "0",
-      str_detect(str_to_lower(!!sym(col_name_new)), "^0=|non") ~ "0",
-      str_detect(str_to_lower(!!sym(col_name_new)), "^1=|oui") ~ "1",
-      TRUE ~ !!sym(col_name_new)
+      TRUE ~ as.character(!!sym(col_name_new))
     ))
-  
-  cat("✓ Colonne transformée\n")
-  cat("Valeurs après transformation :\n")
+  cat("✓ Column renamed and empty cells filled with '0'\n")
+  cat("Unique values after processing:\n")
   print(table(raw[[col_name_new]], useNA = "ifany"))
-} else {
-  cat("\n⚠ Colonne 'Appartenez vous à une Organisation Paysanne (OP) ou coopérative...?' non trouvée\n")
 }
 
-#16. SUPPRESSION COLONNE "Si Oui, nom de l'OP" 
-# Supprimer la colonne spécifiquement
-col_op_nom <- names(raw)[grep("si.*oui.*nom.*op|nom.*op", names(raw), ignore.case = TRUE)][1]
-
-cat("\nSuppression de la colonne 'Si Oui, nom de l'OP'...\n")
-
-if (!is.na(col_op_nom)) {
-  cat("Colonne trouvée:", col_op_nom, "\n")
-  raw <- raw %>% select(-all_of(col_op_nom))
-  cat("✓ Colonne supprimée avec succès\n")
-  cat("Dimensions après suppression :", nrow(raw), "lignes x", ncol(raw), "colonnes\n")
-} else {
-  cat("⚠ Colonne non trouvée. Voici les colonnes contenant 'nom' :\n")
-  nom_cols <- names(raw)[grep("nom", names(raw), ignore.case = TRUE)]
-  print(nom_cols)
-}
-
-#17. SUPPRESSION COLONNE "Année de création"
-# Supprimer la colonne spécifiquement
-col_annee <- names(raw)[grep("année.*création|annee.*creation", names(raw), ignore.case = TRUE)][1]
-
-cat("\nSuppression de la colonne 'Année de création'...\n")
-
-if (!is.na(col_annee)) {
-  cat("Colonne trouvée:", col_annee, "\n")
-  raw <- raw %>% select(-all_of(col_annee))
-  cat("✓ Colonne supprimée avec succès\n")
-  cat("Dimensions après suppression :", nrow(raw), "lignes x", ncol(raw), "colonnes\n")
-} else {
-  cat("⚠ Colonne non trouvée. Voici les colonnes contenant 'année' ou 'creation' :\n")
-  annee_cols <- names(raw)[grep("année|annee|création|creation", names(raw), ignore.case = TRUE)]
-  print(annee_cols)
-}
-
-#18 REMPLISSAGE CELLULES VIDES "Superficie de terre agricole"
-# Chercher la colonne
-col_superficie <- names(raw)[grep("superficie.*terre.*agricole|terre.*agricole.*valeur", names(raw), ignore.case = TRUE)][1]
-
-if (!is.na(col_superficie)) {
-  cat("\nColonne trouvée:", col_superficie, "\n")
-  cat("Valeurs avant remplissage :\n")
-  print(table(raw[[col_superficie]], useNA = "ifany"))
-  
-  # Convertir en caractères et remplacer les cellules vides par "0"
+# Rename secondary activity column: Agriculture
+cat("\n--- Renaming secondary activity column: Agriculture ---\n")
+col_agriculture <- find_col(raw, "activites.*secondaires.*agriculture")
+if (!is.na(col_agriculture)) {
+  col_name_new <- "I.- IDENTIFICATION DU CHEF DE MENAGE /Quelles sont vos activites secondaires ?/Agriculture: 0=Non, 1=Oui"
   raw <- raw %>%
-    mutate(!!col_superficie := as.character(!!sym(col_superficie))) %>%
-    mutate(!!col_superficie := case_when(
-      is.na(!!sym(col_superficie)) | !!sym(col_superficie) == "" | !!sym(col_superficie) == "NA" ~ "0",
-      TRUE ~ !!sym(col_superficie)
+    rename(!!col_name_new := all_of(col_agriculture)) %>%
+    mutate(!!col_name_new := case_when(
+      is.na(!!sym(col_name_new)) | !!sym(col_name_new) == "" ~ "0",
+      TRUE ~ as.character(!!sym(col_name_new))
     ))
-  
-  cat("✓ Cellules vides remplacées par '0'\n")
-  cat("Valeurs après remplissage :\n")
-  print(table(raw[[col_superficie]], useNA = "ifany"))
+  cat("✓ Column renamed and empty cells filled with '0'\n")
+  cat("Unique values after processing:\n")
+  print(table(raw[[col_name_new]], useNA = "ifany"))
+}
+
+# Rename secondary activity column: Commerce
+cat("\n--- Renaming secondary activity column: Commerce ---\n")
+col_commerce <- find_col(raw, "activites.*secondaires.*commerce")
+if (!is.na(col_commerce)) {
+  col_name_new <- "I.- IDENTIFICATION DU CHEF DE MENAGE /Quelles sont vos activites secondaires ?/Commerce: 0=Non, 1=Oui"
+  raw <- raw %>%
+    rename(!!col_name_new := all_of(col_commerce)) %>%
+    mutate(!!col_name_new := case_when(
+      is.na(!!sym(col_name_new)) | !!sym(col_name_new) == "" ~ "0",
+      TRUE ~ as.character(!!sym(col_name_new))
+    ))
+  cat("✓ Column renamed and empty cells filled with '0'\n")
+  cat("Unique values after processing:\n")
+  print(table(raw[[col_name_new]], useNA = "ifany"))
+}
+
+# Rename secondary activity column: Artisanat
+cat("\n--- Renaming secondary activity column: Artisanat ---\n")
+col_artisanat <- find_col(raw, "activites.*secondaires.*artisanat")
+if (!is.na(col_artisanat)) {
+  col_name_new <- "I.- IDENTIFICATION DU CHEF DE MENAGE /Quelles sont vos activites secondaires ?/Artisanat: 0=Non, 1=Oui"
+  raw <- raw %>%
+    rename(!!col_name_new := all_of(col_artisanat)) %>%
+    mutate(!!col_name_new := case_when(
+      is.na(!!sym(col_name_new)) | !!sym(col_name_new) == "" ~ "0",
+      TRUE ~ as.character(!!sym(col_name_new))
+    ))
+  cat("✓ Column renamed and empty cells filled with '0'\n")
+  cat("Unique values after processing:\n")
+  print(table(raw[[col_name_new]], useNA = "ifany"))
+}
+
+# Rename secondary activity column: Autre
+cat("\n--- Renaming secondary activity column: Autre ---\n")
+col_autre <- find_col(raw, "activites.*secondaires.*autre")
+if (!is.na(col_autre)) {
+  col_name_new <- "I.- IDENTIFICATION DU CHEF DE MENAGE /Quelles sont vos activites secondaires ?/Autre: 0=Non, 1=Oui"
+  raw <- raw %>%
+    rename(!!col_name_new := all_of(col_autre)) %>%
+    mutate(!!col_name_new := case_when(
+      is.na(!!sym(col_name_new)) | !!sym(col_name_new) == "" ~ "0",
+      TRUE ~ as.character(!!sym(col_name_new))
+    ))
+  cat("✓ Column renamed and empty cells filled with '0'\n")
+  cat("Unique values after processing:\n")
+  print(table(raw[[col_name_new]], useNA = "ifany"))
+}
+
+# Rename main cultures column: maïs
+cat("\n--- Renaming main cultures column: maïs ---\n")
+col_cultures_mais <- find_col(raw, "principales.*cultures.*maïs|principales.*cultures.*mais")
+if (!is.na(col_cultures_mais)) {
+  col_name_new <- "I.- IDENTIFICATION DU CHEF DE MENAGE /Quelles sont les principales cultures pratiquées par votre ménage ? /1=maïs/0=Vides,1=Oui"
+  raw <- raw %>%
+    rename(!!col_name_new := all_of(col_cultures_mais))
+  cat("✓ Column renamed successfully\n")
+  cat("Unique values after renaming:\n")
+  print(table(raw[[col_name_new]], useNA = "ifany"))
+}
+
+# Rename main cultures column: manioc
+cat("\n--- Renaming main cultures column: manioc ---\n")
+col_cultures_manioc <- find_col(raw, "principales.*cultures.*manioc")
+if (!is.na(col_cultures_manioc)) {
+  col_name_new <- "I.- IDENTIFICATION DU CHEF DE MENAGE /Quelles sont les principales cultures pratiquées par votre ménage ? /2=manioc/0=Non, 1=Oui"
+  raw <- raw %>%
+    rename(!!col_name_new := all_of(col_cultures_manioc)) %>%
+    mutate(!!col_name_new := case_when(
+      is.na(!!sym(col_name_new)) | !!sym(col_name_new) == "" ~ "0",
+      TRUE ~ as.character(!!sym(col_name_new))
+    ))
+  cat("✓ Column renamed and empty cells filled with '0'\n")
+  cat("Unique values after processing:\n")
+  print(table(raw[[col_name_new]], useNA = "ifany"))
+}
+
+# Rename main cultures column: igname
+cat("\n--- Renaming main cultures column: igname ---\n")
+col_cultures_igname <- find_col(raw, "principales.*cultures.*igname")
+if (!is.na(col_cultures_igname)) {
+  col_name_new <- "I.- IDENTIFICATION DU CHEF DE MENAGE /Quelles sont les principales cultures pratiquées par votre ménage ? /3=igname/0=Non, 1=Oui"
+  raw <- raw %>%
+    rename(!!col_name_new := all_of(col_cultures_igname)) %>%
+    mutate(!!col_name_new := case_when(
+      is.na(!!sym(col_name_new)) | !!sym(col_name_new) == "" ~ "0",
+      TRUE ~ as.character(!!sym(col_name_new))
+    ))
+  cat("✓ Column renamed and empty cells filled with '0'\n")
+  cat("Unique values after processing:\n")
+  print(table(raw[[col_name_new]], useNA = "ifany"))
+}
+
+# Rename main cultures column: arachide
+cat("\n--- Renaming main cultures column: arachide ---\n")
+col_cultures_arachide <- find_col(raw, "principales.*cultures.*arachide")
+if (!is.na(col_cultures_arachide)) {
+  col_name_new <- "I.- IDENTIFICATION DU CHEF DE MENAGE /Quelles sont les principales cultures pratiquées par votre ménage ? /4=arachide/0=Non, 1=Oui"
+  raw <- raw %>%
+    rename(!!col_name_new := all_of(col_cultures_arachide)) %>%
+    mutate(!!col_name_new := case_when(
+      is.na(!!sym(col_name_new)) | !!sym(col_name_new) == "" ~ "0",
+      TRUE ~ as.character(!!sym(col_name_new))
+    ))
+  cat("✓ Column renamed and empty cells filled with '0'\n")
+  cat("Unique values after processing:\n")
+  print(table(raw[[col_name_new]], useNA = "ifany"))
+}
+
+# Rename main cultures column: haricot (niébé)
+cat("\n--- Renaming main cultures column: haricot (niébé) ---\n")
+col_cultures_haricot <- find_col(raw, "principales.*cultures.*haricot|principales.*cultures.*nié")
+if (!is.na(col_cultures_haricot)) {
+  col_name_new <- "I.- IDENTIFICATION DU CHEF DE MENAGE /Quelles sont les principales cultures pratiquées par votre ménage ? /5=haricot (niébé)/0=Non, 1=Oui"
+  raw <- raw %>%
+    rename(!!col_name_new := all_of(col_cultures_haricot)) %>%
+    mutate(!!col_name_new := case_when(
+      is.na(!!sym(col_name_new)) | !!sym(col_name_new) == "" ~ "0",
+      TRUE ~ as.character(!!sym(col_name_new))
+    ))
+  cat("✓ Column renamed and empty cells filled with '0'\n")
+  cat("Unique values after processing:\n")
+  print(table(raw[[col_name_new]], useNA = "ifany"))
+}
+
+# Rename main cultures column: soja
+cat("\n--- Renaming main cultures column: soja ---\n")
+col_cultures_soja <- find_col(raw, "principales.*cultures.*soja")
+if (!is.na(col_cultures_soja)) {
+  col_name_new <- "I.- IDENTIFICATION DU CHEF DE MENAGE /Quelles sont les principales cultures pratiquées par votre ménage ? /6=soja/0=Non, 1=Oui"
+  raw <- raw %>%
+    rename(!!col_name_new := all_of(col_cultures_soja)) %>%
+    mutate(!!col_name_new := case_when(
+      is.na(!!sym(col_name_new)) | !!sym(col_name_new) == "" ~ "0",
+      TRUE ~ as.character(!!sym(col_name_new))
+    ))
+  cat("✓ Column renamed and empty cells filled with '0'\n")
+  cat("Unique values after processing:\n")
+  print(table(raw[[col_name_new]], useNA = "ifany"))
+}
+
+# Rename main cultures column: mil et sorgho
+cat("\n--- Renaming main cultures column: mil et sorgho ---\n")
+col_cultures_mil <- find_col(raw, "principales.*cultures.*mil|principales.*cultures.*sorgho")
+if (!is.na(col_cultures_mil)) {
+  col_name_new <- "I.- IDENTIFICATION DU CHEF DE MENAGE /Quelles sont les principales cultures pratiquées par votre ménage ? /7=mil et sorgho/0=Non, 1=Oui"
+  raw <- raw %>%
+    rename(!!col_name_new := all_of(col_cultures_mil)) %>%
+    mutate(!!col_name_new := case_when(
+      is.na(!!sym(col_name_new)) | !!sym(col_name_new) == "" ~ "0",
+      TRUE ~ as.character(!!sym(col_name_new))
+    ))
+  cat("✓ Column renamed and empty cells filled with '0'\n")
+  cat("Unique values after processing:\n")
+  print(table(raw[[col_name_new]], useNA = "ifany"))
+}
+
+# Rename main cultures column: patate douce
+cat("\n--- Renaming main cultures column: patate douce ---\n")
+col_cultures_patate <- find_col(raw, "principales.*cultures.*patate|principales.*cultures.*douce")
+if (!is.na(col_cultures_patate)) {
+  col_name_new <- "I.- IDENTIFICATION DU CHEF DE MENAGE /Quelles sont les principales cultures pratiquées par votre ménage ? /8=patate douce/0=Non, 1=Oui"
+  raw <- raw %>%
+    rename(!!col_name_new := all_of(col_cultures_patate)) %>%
+    mutate(!!col_name_new := case_when(
+      is.na(!!sym(col_name_new)) | !!sym(col_name_new) == "" ~ "0",
+      TRUE ~ as.character(!!sym(col_name_new))
+    ))
+  cat("✓ Column renamed and empty cells filled with '0'\n")
+  cat("Unique values after processing:\n")
+  print(table(raw[[col_name_new]], useNA = "ifany"))
+}
+
+# Rename main cultures column: pomme de terre
+cat("\n--- Renaming main cultures column: pomme de terre ---\n")
+col_cultures_pomme <- find_col(raw, "principales.*cultures.*pomme|principales.*cultures.*terre")
+if (!is.na(col_cultures_pomme)) {
+  col_name_new <- "I.- IDENTIFICATION DU CHEF DE MENAGE /Quelles sont les principales cultures pratiquées par votre ménage ? /9=pomme de terre/0=Non, 1=Oui"
+  raw <- raw %>%
+    rename(!!col_name_new := all_of(col_cultures_pomme)) %>%
+    mutate(!!col_name_new := case_when(
+      is.na(!!sym(col_name_new)) | !!sym(col_name_new) == "" ~ "0",
+      TRUE ~ as.character(!!sym(col_name_new))
+    ))
+  cat("✓ Column renamed and empty cells filled with '0'\n")
+  cat("Unique values after processing:\n")
+  print(table(raw[[col_name_new]], useNA = "ifany"))
+}
+
+# Rename main cultures column: légumes
+cat("\n--- Renaming main cultures column: légumes ---\n")
+col_cultures_legumes <- find_col(raw, "principales.*cultures.*légumes|principales.*cultures.*legumes")
+if (!is.na(col_cultures_legumes)) {
+  col_name_new <- "I.- IDENTIFICATION DU CHEF DE MENAGE /Quelles sont les principales cultures pratiquées par votre ménage ? /10=légumes/0=Non, 1=Oui"
+  raw <- raw %>%
+    rename(!!col_name_new := all_of(col_cultures_legumes)) %>%
+    mutate(!!col_name_new := case_when(
+      is.na(!!sym(col_name_new)) | !!sym(col_name_new) == "" ~ "0",
+      TRUE ~ as.character(!!sym(col_name_new))
+    ))
+  cat("✓ Column renamed and empty cells filled with '0'\n")
+  cat("Unique values after processing:\n")
+  print(table(raw[[col_name_new]], useNA = "ifany"))
+}
+
+# Rename main cultures column: autre (à préciser)
+cat("\n--- Renaming main cultures column: autre (à préciser) ---\n")
+col_cultures_autre <- find_col(raw, "principales.*cultures.*autre|principales.*cultures.*précis")
+if (!is.na(col_cultures_autre)) {
+  col_name_new <- "I.- IDENTIFICATION DU CHEF DE MENAGE /Quelles sont les principales cultures pratiquées par votre ménage ? /11=autre (à préciser)/0=Non, 1=Oui"
+  raw <- raw %>%
+    rename(!!col_name_new := all_of(col_cultures_autre)) %>%
+    mutate(!!col_name_new := case_when(
+      is.na(!!sym(col_name_new)) | !!sym(col_name_new) == "" ~ "0",
+      TRUE ~ as.character(!!sym(col_name_new))
+    ))
+  cat("✓ Column renamed and empty cells filled with '0'\n")
+  cat("Unique values after processing:\n")
+  print(table(raw[[col_name_new]], useNA = "ifany"))
+}
+
+# Remove specific column "Si 11=autre (à préciser)"
+cat("\n--- Removing 'Si 11=autre (à préciser)' column ---\n")
+raw <- raw %>%
+  select(-any_of(c("I.- IDENTIFICATION DU CHEF DE MENAGE /Si 11=autre (à préciser)")))
+if (!"I.- IDENTIFICATION DU CHEF DE MENAGE /Si 11=autre (à préciser)" %in% names(raw)) {
+  cat("✓ Column removed successfully\n")
 } else {
-  cat("\n⚠ Colonne 'Superficie de terre agricole' non trouvée\n")
+  cat("⚠ Column still present\n")
 }
 
-#19.  REMPLISSAGE CELLULES VIDES "Principales cultures"
+# Handle numeric fields with year conversion
+cat("\n--- Processing experience and land fields ---\n")
 
-# Chercher toutes les colonnes contenant "principales cultures"
-col_cultures <- names(raw)[grep("principales.*cultures", names(raw), ignore.case = TRUE)]
-
-if (length(col_cultures) > 0) {
-  cat("\nColonnes trouvées:", length(col_cultures), "\n")
-  print(col_cultures)
-  
-  # Remplir les cellules vides par "0" pour chaque colonne
-  for (col in col_cultures) {
-    cat("\nTraitement de la colonne:", col, "\n")
-    cat("Valeurs avant remplissage :\n")
-    print(table(raw[[col]], useNA = "ifany"))
-    
-    raw <- raw %>%
-      mutate(!!col := as.character(!!sym(col))) %>%
-      mutate(!!col := case_when(
-        is.na(!!sym(col)) | !!sym(col) == "" | !!sym(col) == "NA" ~ "0",
-        TRUE ~ !!sym(col)
-      ))
-    
-    cat("✓ Cellules vides remplacées par '0'\n")
-    cat("Valeurs après remplissage :\n")
-    print(table(raw[[col]], useNA = "ifany"))
-  }
-} else {
-  cat("\n⚠ Aucune colonne 'Principales cultures' non trouvée\n")
+# Years since formation training
+col_depuis <- find_col(raw, "si.*oui.*depuis|depuis.*quand")
+if (!is.na(col_depuis)) {
+  raw <- raw %>%
+    mutate(!!col_depuis := as.character(!!sym(col_depuis))) %>%
+    mutate(!!col_depuis := sapply(!!sym(col_depuis), years_since))
 }
 
-#20. EXPORT DES DONNEES NETTOYEES
-cat("\n=== EXPORT DES DONNEES NETTOYEES ===\n")
+# Experience, land, and main crops: fill zeros for missing
+numeric_fields <- c(
+  find_col(raw, "expérience.*élevage|experience.*elevage"),
+  find_col(raw, "superficie.*terre.*agricole|terre.*agricole.*valeur"),
+  find_col(raw, "principales.*cultures")
+)
+numeric_fields <- numeric_fields[!is.na(numeric_fields)]
+raw <- fill_empty_cells(raw, numeric_fields, "0")
 
-# Exporter en Excel
-output_path <- "c:/Users/lucas/Downloads/data1.xlsx"
+# Remove unused year/OP name columns
+raw <- remove_cols_by_pattern(raw,
+  c("année.*création|annee.*creation", "si.*oui.*nom.*op|nom.*op"))
 
-# Essayer avec openxlsx (recommandé)
-if (!require(openxlsx, quietly = TRUE)) {
-  cat("Installation de openxlsx...\n")
-  install.packages("openxlsx")
-  library(openxlsx)
-}
+# Summary
+cat("\n=== SUMMARY ===\n")
+cat("Final dimensions:", nrow(raw), "rows ×", ncol(raw), "columns\n")
+cat("Columns cleaned: ", length(COLUMN_SPECS), "\n", sep = "")
 
+# Export
+cat("\n=== EXPORTING ===\n")
+output_path <- "C:/Users/lucas/OneDrive/Bureau/Data/Data_cleaning/data1.xlsx"
 write.xlsx(raw, output_path, rowNames = FALSE, overwrite = TRUE)
-cat("Fichier Excel sauvegardé :", output_path, "\n")
-cat("Dimensions finales :", nrow(raw), "lignes x", ncol(raw), "colonnes\n")
-
-
-
-
+cat("✓ Saved to:", output_path, "\n")
 

@@ -3,3 +3,9 @@ data2.xlsx
 data3.xlsx
 *.xlsx
 testcode.R
+.graphify
+OPTIMIZATION_REPORT.md
+.claude
+UNITE2_STRUCTURE_ANALYSIS.md
+claude-bare-debug.log
+claude-debug.log
