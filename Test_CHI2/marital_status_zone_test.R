@@ -107,6 +107,10 @@ survey <- survey %>%
     CommuneClean = normalize_text(Commune)
   )
 
+# Tori-Bossito is an arrondissement of Tori commune; count it as Tori for the zone join
+survey <- survey %>%
+  mutate(CommuneClean = if_else(CommuneClean == "tori bossito", "tori", CommuneClean))
+
 zone_lookup <- zones %>%
   select(DistrictClean, VegetationZone, PhytogeographicZone) %>%
   distinct(DistrictClean, .keep_all = TRUE)

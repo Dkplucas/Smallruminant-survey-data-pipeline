@@ -849,6 +849,148 @@ if (old_col_name_freq %in% names(raw)) {
   cat("\n⚠ Colonne 'Si oui, avec quelle fréquence ?' non trouvée\n")
 }
 
+#20. TRANSFORMATION "Types génétiques" - Espèce de petits ruminants --------
+old_col_name_species <- "12.) Effectif et composition du cheptel/Races caprines/Types génétiques"
+new_col_name_species <- "12.) Espece de petit ruminants: 1=Caprins, 2=Ovins, 3=Ovins et Caprins"
+
+if (old_col_name_species %in% names(raw)) {
+  cat("\n=== TRANSFORMATION: Espèce de petits ruminants ===\n")
+  cat("Valeurs avant transformation:\n")
+  print(table(raw[[old_col_name_species]], useNA = "ifany"))
+
+  normalize_species_text <- function(x) {
+    x <- as.character(x)
+    x <- iconv(x, from = "", to = "ASCII//TRANSLIT")
+    x <- str_to_lower(x)
+    x <- str_replace_all(x, "\\s+", " ")
+    x <- str_squish(x)
+    x
+  }
+
+  group_1_values <- c(
+    "Caprines",
+    "Caprins/Djallonke et Métis",
+    "Caprin",
+    "Ovin",
+    "Caprins / métis",
+    "Caprin métis et djallonké",
+    "Caprin djallonké et caprins métis",
+    "Caprins djallonké/ caprins métis",
+    "Caprin Metis et caprin djallonké",
+    "Caprin Metis",
+    "Ovin métis, Ovin djallonké",
+    "Caprin métis",
+    "Ovin Djallonké Ovin Métis",
+    "Caprin métis\nCaprin djallonké",
+    "Caprin Métis et djallonké",
+    "Caprins djallonké et métis",
+    "Caprin djallonké Caprin métis",
+    "Caprin métis Caprin Djallonké",
+    "Caprin métis Caprin djallonké",
+    "Caprin Metis Caprin djallonké",
+    "Caprins djallonké Caprins métis",
+    "Caprins Djallonké Caprins métis",
+    "Caprin djallonké Caprin métis",
+    "Caprins Metis Caprins djallonké"
+  )
+
+  group_2_values <- c(
+    "Ovin/métis",
+    "Ovin (Djallonke et Métis)",
+    "Ovin",
+    "Ovins métis et djallonke",
+    "Ovin djallonké et Ovin métis",
+    "Ovin métis/ Ovin djallonké",
+    "Ovin métis",
+    "Ovin métis et Ovin djallonké",
+    "Ovin métis Ovin sahélien",
+    "Ovin métis Ovin djallonké",
+    "Ovin djallonké Ovin métis"
+  )
+
+  group_3_values <- c(
+    "Djallonke",
+    "12/métis 1/brebis Djallonke",
+    "métis ovins",
+    "Caprin (Djallonke, Métis , Sahélien) , Ovin (métis, Sahélien)",
+    "Effectif Ovin:  35 Effectif caprin : 29",
+    "Ovin (métis et djallonke) et caprin (métis et djallonke)",
+    "Ovins et caprins métis+ Djallonke",
+    "Caprin (Djallonke et Métis) Ovin (métis)",
+    "Djallonke et Ovins métis et djallonke",
+    "8 caprins ( djallonké et métis) / 30 ovins (djallonké et métis)",
+    "Ovin Métis et Djallonké",
+    "Ovin/ métis et djallonké",
+    "Ovin métis (30) caprins métis (15)",
+    "Ovin métis (8)",
+    "Ovin métis et djallonké",
+    "Ovin métis/ djallonké",
+    "Ovin métis et djallonké ( sahélien : 1; métis: 28 djallonké 6",
+    "Ovin métis et Ovin djallonké",
+    "Ovin djallonké/ Ovin métis",
+    "Caprin (djallonké et métis) :",
+    "Ovin métis ( 29) (6 beliers, 9 brebis, 14 jeunes dont 6 femelles et 8 mâles de moins de 6 mois)",
+    "Ovin 6 métis (3 femelles reproductrices , 2 petits ‹ 6 mois et 1 mâle ‹ 6 mois), 11 Ovin djallonké (1 mâle reproducteur, dont 4 femelles reproductrices et 6 jeunes (3 femelles, 3 mâles < 6 mois)",
+    "Ovin métis (30) et Ovin djallonké (15)",
+    "Caprin djallonké Total : 4 Caprin métis Total : 5 Ovin métis Total : 92 Total Ovin + caprin : 101",
+    "Ovin djallonké x'et métis Caprin djallonké et métis",
+    "Ovin métis Ovin métis Caprin métis Caprin djallonké",
+    "Ovin métis Caprin métis et djallonké",
+    "Ovin métis Caprin djallonké Caprin métis",
+    "Caprin  métis et djallonké Ovin métis",
+    "Ovin métis Caprin metis Caprin djallonké",
+    "Caprin djallonké Ovin métis",
+    "Ovin métis Caprin métis",
+    "Ovin métis Caprin djallonké  Caprin métis",
+    "Ovin métis Caprin métis Caprin djallonké",
+    "Ovin Métis Caprin djallonké",
+    "Caprin métis : 9 , 4 femelles reproductrices, 2 jeune boucs Ovin Metis : 12 avec 3 et 2 béliers",
+    "Caprin métis : 9 Caprin Sahélien : 5 Femelles reproductrices : 4 Mâles reproducteurs sahéliens : 2 (passés)",
+    "Ovins métis Caprins métis",
+    "Caprin djallonké Caprin métis",
+    "Ovin métis\nCaprins métis Caprins djallonké",
+    "Ovins djallonké Ovins métis Ovins Sahéliens Caprin djallonké Caprins métis",
+    "Ovin métis Ovin djallonké",
+    "Ovin métis (8) Caprin métis (7)",
+    "Caprin (djallonké et métis) :\n1 bouc, 13 femelles reproductrices (2 djallonké + 11 métis), 3 mâles jeunes , 3 femelles jeunes, 4 mâles < 6 mois et 6 femelles < 6 mois) Total Caprin : 30 Ovin (métis):  Femelles reproductrices : 10 Mâle adulte (bélier) : 1 Mâle > 6 mois: 3 Femelles > 6 mois: 4Mâle < 6 mois: 5 Femelles< 6 mois: 5 Total Ovin: 28",
+    "Ovin métis ( 29) (6 beliers, 9 brebis, 14 jeunes dont 6 femelles et 8 mâles de moins de 6 mois) Ovin djallonké ( 3 femelles) Caprin Metis 12 (4 chèvres, 2 boucs, 3 chevreaux, 3 chèvrelles)",
+    "Ovin 6 métis (3 femelles reproductrices , 2 petits ‹ 6 mois et 1 mâle ‹ 6 mois), 11 Ovin djallonké (1 mâle reproducteur, dont 4 femelles reproductrices et 6 jeunes (3 femelles, 3 mâles < 6 mois) Caprin métis ( 2 femelles reproductrices)"
+  )
+
+  norm_group_1 <- normalize_species_text(group_1_values)
+  norm_group_2 <- normalize_species_text(group_2_values)
+  norm_group_3 <- normalize_species_text(group_3_values)
+
+  raw <- raw %>%
+    rename(!!new_col_name_species := all_of(old_col_name_species)) %>%
+    mutate(
+      !!new_col_name_species := as.character(!!sym(new_col_name_species)),
+      .species_norm_tmp = normalize_species_text(!!sym(new_col_name_species)),
+      !!new_col_name_species := case_when(
+        is.na(.species_norm_tmp) | .species_norm_tmp == "" ~ "0",
+        .species_norm_tmp %in% norm_group_1 ~ "1",
+        .species_norm_tmp %in% norm_group_2 ~ "2",
+        .species_norm_tmp %in% norm_group_3 ~ "3",
+        TRUE ~ "0"
+      )
+    ) %>%
+    select(-.species_norm_tmp)
+
+  cat("✓ Colonne renommée et transformée\n")
+  cat("Valeurs après transformation:\n")
+  print(table(raw[[new_col_name_species]], useNA = "ifany"))
+
+  empty_count_species <- sum(is.na(raw[[new_col_name_species]]) | raw[[new_col_name_species]] == "")
+  cat("Nombre de cellules vides après transformation:", empty_count_species, "\n")
+  if (empty_count_species == 0) {
+    cat("✓ SUCCESS: Aucune cellule vide dans la colonne transformée\n")
+  } else {
+    cat("⚠ WARNING:", empty_count_species, "cellule(s) vide(s) détectée(s)\n")
+  }
+} else {
+  cat("\n⚠ Colonne '12.) Effectif et composition du cheptel/Races caprines/Types génétiques' non trouvée\n")
+}
+
 #21. TRANSFORMATION "Si oui, quelles sont ces maladies ?" - Suivi sanitaire --------
 # Renommer et transformer la colonne sur les maladies
 old_col_name_maladies_spec <- "11.) Suivi sanitaire/Si oui, quelles sont ces maladies ?"
