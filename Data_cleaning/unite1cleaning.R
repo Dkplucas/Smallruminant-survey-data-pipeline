@@ -181,9 +181,9 @@ remove_cols_by_pattern <- function(raw, patterns, verbose = TRUE) {
 
 # Setup
 cat("=== DATA CLEANING: HOUSEHOLD IDENTIFICATION ===\n\n")
-setwd("c:/Users/lucas/Downloads/")
+setwd("C:/Users/lucas/OneDrive/Bureau/Data/Data_cleaning")
 
-xlsx_path <- "c:/Users/lucas/Downloads/Questionnaire_caracterisation_pratiques_de_croisements_-_latest_version_-_labels_-_2026-07-28-03-29-08.xlsx"
+xlsx_path <- "C:/Users/lucas/OneDrive/Bureau/Data/Data_cleaning/Questionnaire_caracterisation_pratiques_de_croisements_-_latest_version_-_labels_-_2026-08-25-07-38-57.xlsx"
 
 # Load data
 raw <- read_excel(xlsx_path, col_names = TRUE)
