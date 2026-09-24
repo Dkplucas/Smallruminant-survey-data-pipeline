@@ -9,3 +9,4 @@ OPTIMIZATION_REPORT.md
 UNITE2_STRUCTURE_ANALYSIS.md
 claude-bare-debug.log
 claude-debug.log
+*.csv
