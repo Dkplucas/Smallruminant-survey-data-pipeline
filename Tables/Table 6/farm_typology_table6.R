@@ -1,0 +1,300 @@
+# =============================================================================
+# Table 7 equivalent -- profile of the farm types on reproduction-management,
+# selection and health practices (variables NOT used to build the clusters)
+# =============================================================================
+# Run the farm-typology (clustering) script FIRST (farm_typology_table6.R, or
+# your renamed copy, e.g. farm_typology_table5.R). This script reads the
+# farm-to-cluster assignments and the cluster names from the Excel file that
+# script produces, so this table always uses exactly the same farms, clusters
+# and names (including any CLUSTER_LABELS you set there).
+#
+# Table numbering does not matter: the typology workbook is found automatically
+# (any farm_typology_table<N>.xlsx containing a 'Farm_assignments' sheet), and
+# its profile sheet is found by name ('...profile'). Set TYPOLOGY_XLSX below
+# only if you want to point to a specific file.
+#
+# What this script does:
+#   1. Reads the raw survey export and the typology workbook (cluster membership)
+#   2. Builds the practice variables that exist in this questionnaire:
+#        - Breeding male present in the herd              (paper: "Presence of bull in herd")
+#        - Crossbreeding between breeds practised
+#        - Selection criteria for breeding stock: disease resistance, past
+#          performance, genetic origin/breed             (closest to "Selection practice")
+#        - Health management: deworming, vaccination      (closest to "Ethnoveterinary practices")
+#        - Prolificacy: young per litter                  (closest to the calving variables)
+#   3. Profiles the clusters: % of farms per category (Pearson chi-square with
+#      the standard p-value; Bonferroni-adjusted pairwise proportion tests for
+#      the a/b/c letters) and mean +/- SD (Kruskal-Wallis, letters from
+#      Bonferroni-adjusted pairwise Wilcoxon tests)
+#   4. Reports separately the variables that have no usable variation
+#      (e.g. systematic animal marking: 1 farm) instead of padding the table
+#   5. Exports everything to Excel
+#
+# NOT available in this questionnaire (so not in the table): selection practice
+# asked separately for males and females, ethnoveterinary practices, age at
+# first calving, number of calvings per cow, and the ear-mark method as a
+# comparable variable (only 1 farm marks animals).
+#
+# Required packages: readxl, dplyr, tidyr, stringr, openxlsx
+# =============================================================================
+
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(openxlsx)
+
+# ---- File paths & settings (edit to match your local paths) ----------------
+LABELS_PATH    <- "Questionnaire_caracterisation_pratiques_de_croisements_-_latest_version_-_labels_-_2026-08-25-07-38-57.xlsx"
+TYPOLOGY_XLSX  <- NULL    # Excel file written by the typology script; NULL = auto-detect in the working directory
+OUTPUT_PATH    <- "farm_typology_table6.xlsx"   # rename to match your own table numbering if you like
+OUTPUT_SHEET   <- "Table7_profile"              # name of the main sheet in the output workbook
+MIN_CATEGORY_N <- 5   # categories with fewer farms are left out of the chi-square TEST only
+
+# ---- Helpers ---------------------------------------------------------------
+find_col <- function(df, pattern, fixed = TRUE) {
+  hits <- grep(pattern, str_trim(names(df)), fixed = fixed, value = FALSE)
+  if (length(hits) != 1) {
+    stop(sprintf("Expected exactly 1 column matching '%s', found %d.\nMatches: %s",
+                 pattern, length(hits), paste(names(df)[hits], collapse = " | ")))
+  }
+  names(df)[hits]
+}
+yn <- function(x) {               # "Oui"/"Non" text or 1/0 codes -> "Yes"/"No"
+  x <- str_trim(as.character(x))
+  case_when(x %in% c("Oui", "1", "1.0") ~ "Yes", x %in% c("Non", "0", "0.0") ~ "No", TRUE ~ NA_character_)
+}
+fmt_p <- function(p) ifelse(is.na(p), "", ifelse(p < 0.001, "<0.001", sprintf("%.3f", p)))
+
+cld_letters <- function(diff, k) {   # compact letter display (insert-and-absorb)
+  sets <- list(seq_len(k))
+  for (i in seq_len(k - 1)) for (j in (i + 1):k) if (isTRUE(diff[i, j])) {
+    new <- list()
+    for (s in sets) {
+      if (i %in% s && j %in% s) { new[[length(new) + 1]] <- setdiff(s, i)
+                                  new[[length(new) + 1]] <- setdiff(s, j) }
+      else new[[length(new) + 1]] <- s
+    }
+    new <- new[lengths(new) > 0]
+    keep <- rep(TRUE, length(new))
+    for (u in seq_along(new)) for (v in seq_along(new)) {
+      if (u != v && keep[u] && keep[v] && all(new[[u]] %in% new[[v]]) &&
+          (length(new[[u]]) < length(new[[v]]) || u > v)) keep[u] <- FALSE
+    }
+    sets <- new[keep]
+  }
+  sets <- sets[order(sapply(sets, min))]
+  vapply(seq_len(k), function(g) paste(letters[which(sapply(sets, function(s) g %in% s))], collapse = ""), "")
+}
+prop_letters <- function(x, nn, k) {
+  pairs <- combn(k, 2); np <- ncol(pairs); diff <- matrix(FALSE, k, k)
+  for (p in seq_len(np)) {
+    i <- pairs[1, p]; j <- pairs[2, p]
+    if (x[i] == x[j] && nn[i] == nn[j]) next
+    if ((x[i] == 0 && x[j] == 0) || (x[i] == nn[i] && x[j] == nn[j])) next
+    pv <- suppressWarnings(prop.test(c(x[i], x[j]), c(nn[i], nn[j]), correct = FALSE)$p.value)
+    if (!is.na(pv) && pv * np < 0.05) diff[i, j] <- diff[j, i] <- TRUE
+  }
+  cld_letters(diff, k)
+}
+num_letters <- function(v, g, k) {
+  pairs <- combn(k, 2); np <- ncol(pairs); diff <- matrix(FALSE, k, k)
+  for (p in seq_len(np)) {
+    i <- pairs[1, p]; j <- pairs[2, p]
+    pv <- suppressWarnings(wilcox.test(v[g == i], v[g == j], exact = FALSE)$p.value)
+    if (!is.na(pv) && pv * np < 0.05) diff[i, j] <- diff[j, i] <- TRUE
+  }
+  cld_letters(diff, k)
+}
+
+# Locate the workbook written by the typology (clustering) script
+find_typology_xlsx <- function(path = NULL) {
+  if (!is.null(path)) {
+    if (!file.exists(path)) stop("TYPOLOGY_XLSX not found: ", path, "\nWorking directory is: ", getwd())
+    return(path)
+  }
+  cands <- list.files(pattern = "^farm_typology_table[0-9]+\\.xlsx$")
+  cands <- cands[vapply(cands, function(f) "Farm_assignments" %in% excel_sheets(f), logical(1))]
+  if (length(cands) == 0)
+    stop("No farm-typology workbook (with a 'Farm_assignments' sheet) found in: ", getwd(),
+         "\nRun the typology script first, or set TYPOLOGY_XLSX to its output file.")
+  if (length(cands) > 1)
+    stop("Several typology workbooks found: ", paste(cands, collapse = ", "),
+         "\nSet TYPOLOGY_XLSX to the one you want.")
+  cands
+}
+
+# =============================================================================
+# 1. Read raw data and the cluster assignments from the typology workbook
+# =============================================================================
+raw <- read_excel(LABELS_PATH, col_types = "text")
+COMMUNE_COL <- find_col(raw, "/Commune")
+d <- raw %>% filter(!is.na(.data[[COMMUNE_COL]]), .data[[COMMUNE_COL]] != "Abomey-Calavi")
+d$row_id <- seq_len(nrow(d))
+
+TYPOLOGY_XLSX <- find_typology_xlsx(TYPOLOGY_XLSX)
+sheets <- excel_sheets(TYPOLOGY_XLSX)
+prof_sheet <- grep("profile", sheets, value = TRUE, ignore.case = TRUE)[1]
+if (is.na(prof_sheet)) stop("No '...profile' sheet in ", TYPOLOGY_XLSX, ". Sheets found: ", paste(sheets, collapse = ", "))
+cat("Typology workbook:", TYPOLOGY_XLSX, "| profile sheet:", prof_sheet, "\n")
+t6hdr  <- names(read_excel(TYPOLOGY_XLSX, sheet = prof_sheet, n_max = 0))
+labs   <- sub(" \\(n = [0-9]+\\)$", "", t6hdr[3:(length(t6hdr) - 3)])   # cluster names, in the typology table's column order
+K      <- length(labs)
+assign <- read_excel(TYPOLOGY_XLSX, sheet = "Farm_assignments")
+
+# safety checks: same raw file, and the cluster names match the typology table column headers
+chk <- assign %>% left_join(d %>% select(row_id, commune_raw = all_of(COMMUNE_COL)), by = "row_id")
+if (!all(chk$Commune == chk$commune_raw, na.rm = TRUE) || anyNA(chk$commune_raw))
+  stop("Farm_assignments do not line up with this raw file (commune mismatch). Use the same LABELS_PATH as in the typology script.")
+if (!all(assign$Cluster %in% labs))
+  stop("Cluster names in Farm_assignments do not match the typology table's column headers. Did you rename the headers by hand? ",
+       "Use CLUSTER_LABELS in the typology script instead, then rerun it.")
+cat(sprintf("Clusters read from the typology table: %s\nFarms: %d\n", paste(labs, collapse = " | "), nrow(assign)))
+
+# =============================================================================
+# 2. Build the practice variables
+# =============================================================================
+COL <- list(
+  male_present = find_col(raw, "de m\u00e2les reproducteurs actuellement"),
+  crossbreed   = find_col(raw, "Pratiquez-vous des croisements entre diff\u00e9rentes races caprines"),
+  crit_disease = find_col(raw, "choix des reproducteurs /2="),
+  crit_perf    = find_col(raw, "choix des reproducteurs /3="),
+  crit_genetic = find_col(raw, "choix des reproducteurs /4="),
+  crit_size    = find_col(raw, "choix des reproducteurs /1="),
+  deworm       = find_col(raw, "D\u00e9parasitez-vous vos animaux ? /Oui"),
+  vaccin       = find_col(raw, "Vaccinez-vous vos animaux ? /Oui"),
+  marking      = find_col(raw, "syst\u00e8me de marquage syst\u00e9matique"),
+  ctrl_none    = find_col(raw, "contr\u00f4le de la reproduction utilisez-vous ? /3="),
+  prolific     = find_col(raw, "Prolificit\u00e9 (nombre de chevreaux")
+)
+a <- assign %>%
+  select(row_id, Cluster, Species) %>%
+  left_join(d %>% select(row_id, all_of(unname(unlist(COL)))), by = "row_id")   # unname(): a named vector would RENAME the columns
+# plain base assignments (more robust across dplyr versions than .data[[...]] inside mutate)
+for (nm in c("male_present", "crossbreed", "crit_disease", "crit_perf", "crit_genetic",
+             "crit_size", "deworm", "vaccin", "marking", "ctrl_none")) {
+  a[[nm]] <- yn(a[[COL[[nm]]]])
+}
+a$prolific <- as.numeric(a[[COL$prolific]])
+a$cluster  <- as.integer(factor(a$Cluster, levels = labs))
+n_all <- nrow(a)
+cat("\nMissing values per variable (of", n_all, "farms):\n")
+print(colSums(is.na(a[, c("male_present","crossbreed","crit_disease","crit_perf","crit_genetic","deworm","vaccin","prolific")])))
+
+# =============================================================================
+# 3. Build the Table 7 profile
+# =============================================================================
+col_names <- c("Variable", paste0("Overall (n = ", n_all, ")"),
+               paste0(labs, " (n = ", as.integer(table(factor(a$cluster, levels = seq_len(K)))), ")"),
+               "Chi-square", "p-value", "Test")
+blank <- function() setNames(as.list(rep("", length(col_names))), col_names)
+rows <- list(); add <- function(r) rows[[length(rows) + 1]] <<- r
+excl_notes <- character(0)
+
+cat_vars <- list(
+  list(section = "Reproduction management", label = "Breeding male present in the herd", var = "male_present"),
+  list(section = NULL,                      label = "Crossbreeding between breeds practised", var = "crossbreed"),
+  list(section = "Selection criteria for breeding stock", label = "Disease resistance", var = "crit_disease"),
+  list(section = NULL,                      label = "Past performance", var = "crit_perf"),
+  list(section = NULL,                      label = "Genetic origin / breed", var = "crit_genetic"),
+  list(section = "Health management", label = "Deworming", var = "deworm"),
+  list(section = NULL,                      label = "Vaccination", var = "vaccin"))
+
+h <- blank(); h[["Variable"]] <- "Frequency (% of farms)"; add(h)
+for (cv in cat_vars) {
+  if (!is.null(cv$section)) { s <- blank(); s[["Variable"]] <- paste0("  [", cv$section, "]"); add(s) }
+  v   <- a[[cv$var]]
+  ok  <- !is.na(v)
+  ct  <- table(factor(a$cluster[ok], levels = seq_len(K)), factor(v[ok], levels = c("Yes", "No")))
+  keep <- colSums(ct) >= MIN_CATEGORY_N
+  hr <- blank(); hr[["Variable"]] <- cv$label
+  if (sum(keep) >= 2) {
+    chi <- suppressWarnings(chisq.test(ct[, keep, drop = FALSE], correct = FALSE))
+    pval <- chi$p.value; pct_lo <- 100 * mean(chi$expected < 5)
+    hr[["Chi-square"]] <- sprintf("%.3f", unname(chi$statistic)); hr[["p-value"]] <- fmt_p(pval)
+    hr[["Test"]] <- sprintf("Pearson chi-square, df = %d, n = %d; %.0f%% of cells expected < 5",
+                            unname(chi$parameter), sum(ct), pct_lo)
+  } else {
+    pval <- 1
+    hr[["Test"]] <- "Not tested (fewer than 2 categories with enough farms)"
+  }
+  add(hr)
+  for (lv in c("Yes", "No")) {
+    x <- as.integer(ct[, lv]); nn <- as.integer(rowSums(ct))
+    lt <- if (pval < 0.05) prop_letters(x, nn, K) else rep("", K)
+    r <- blank(); r[["Variable"]] <- paste0("   ", lv)
+    r[[2]] <- sprintf("%.1f", 100 * sum(v[ok] == lv) / sum(ok))
+    for (g in seq_len(K)) r[[2 + g]] <- trimws(sprintf("%.1f %s", 100 * x[g] / nn[g], lt[g]))
+    add(r)
+  }
+}
+
+h <- blank(); h[["Variable"]] <- "Means \u00b1 SD (p-value: Kruskal-Wallis)"; add(h)
+pv_ok <- !is.na(a$prolific)
+kw <- kruskal.test(a$prolific[pv_ok] ~ a$cluster[pv_ok])
+lt <- if (kw$p.value < 0.05) num_letters(a$prolific[pv_ok], a$cluster[pv_ok], K) else rep("", K)
+r <- blank(); r[["Variable"]] <- sprintf("Prolificacy, reported for crossbred animals (young per litter; n = %d)", sum(pv_ok))
+r[[2]] <- sprintf("%.2f \u00b1 %.2f", mean(a$prolific, na.rm = TRUE), sd(a$prolific, na.rm = TRUE))
+for (g in seq_len(K)) {
+  vv <- a$prolific[a$cluster == g & pv_ok]
+  r[[2 + g]] <- trimws(sprintf("%.2f \u00b1 %.2f %s", mean(vv), sd(vv), lt[g]))
+}
+r[["Chi-square"]] <- sprintf("H = %.3f", unname(kw$statistic)); r[["p-value"]] <- fmt_p(kw$p.value); r[["Test"]] <- "Kruskal-Wallis"
+add(r)
+
+table7 <- do.call(rbind, lapply(rows, as.data.frame, check.names = FALSE, stringsAsFactors = FALSE))
+cat("\n===== Table 7 equivalent =====\n"); print(table7, row.names = FALSE, right = FALSE)
+
+# =============================================================================
+# 4. Variables with no usable variation (reported, not tabulated)
+# =============================================================================
+cnt <- function(v, lv) sprintf("%d of %d farms (%.1f%%)", sum(v == lv, na.rm = TRUE), sum(!is.na(v)), 100 * mean(v == lv, na.rm = TRUE))
+not_tab <- data.frame(
+  Variable = c("Systematic animal marking / identification system",
+               "Reproduction control: no control method used",
+               "Selection criterion: body size"),
+  Result = c(paste("Yes:", cnt(a$marking, "Yes")), paste("Yes:", cnt(a$ctrl_none, "Yes")), paste("Yes:", cnt(a$crit_size, "Yes"))),
+  Why_not_in_table = "Almost no variation, so a comparison across clusters is meaningless; report the overall percentage in the text instead.")
+mapping <- data.frame(
+  Paper_Table7_row = c("Selection practice for male", "Selection practice for female", "Presence of bull in herd",
+                       "Ethnoveterinary practices", "Ear marks method", "Age at first calving (months)", "Average number of calvings"),
+  In_this_table = c("Selection criteria for breeding stock (asked once, not by sex)", "Selection criteria for breeding stock (asked once, not by sex)",
+                    "Breeding male present in the herd (direct analog)", "Not asked; closest available: deworming, vaccination",
+                    "Not comparable: systematic marking used by 1 farm only (see Not_tabulated)",
+                    "Not asked", "Not asked; closest available: prolificacy (young per litter)"))
+
+# =============================================================================
+# 5. Export to Excel
+# =============================================================================
+wb <- createWorkbook()
+hs <- createStyle(textDecoration = "bold", fgFill = "#D9E1F2", halign = "center", wrapText = TRUE, fontName = "Arial", fontSize = 10)
+bs <- createStyle(fontName = "Arial", fontSize = 10)
+sec <- createStyle(textDecoration = "bold", fontName = "Arial", fontSize = 10, fgFill = "#F2F2F2")
+
+addWorksheet(wb, OUTPUT_SHEET)
+writeData(wb, OUTPUT_SHEET, table7, headerStyle = hs)
+addStyle(wb, OUTPUT_SHEET, bs, rows = 2:(nrow(table7) + 1), cols = seq_len(ncol(table7)), gridExpand = TRUE)
+sec_rows <- which(table7$Variable %in% c("Frequency (% of farms)", "Means \u00b1 SD (p-value: Kruskal-Wallis)") |
+                  grepl("^  \\[", table7$Variable)) + 1
+addStyle(wb, OUTPUT_SHEET, sec, rows = sec_rows, cols = seq_len(ncol(table7)), gridExpand = TRUE)
+setColWidths(wb, OUTPUT_SHEET, cols = 1, widths = 58)
+setColWidths(wb, OUTPUT_SHEET, cols = 2:(ncol(table7) - 1), widths = 18)
+setColWidths(wb, OUTPUT_SHEET, cols = ncol(table7), widths = 44)
+n_sheep <- sum(a$Species == "Sheep only")
+notes <- c("Notes",
+  sprintf("Same farms and clusters as the farm-typology table (read from %s). These variables were NOT used to build the clusters.", TYPOLOGY_XLSX),
+  "Chi-square: Pearson test with the standard (asymptotic) p-value. 'Test' column shows df, n and the % of cells with expected count < 5; where this is high, treat the p-value with caution.",
+  "Letters (a, b, c): within a row, clusters sharing a letter do not differ significantly (Bonferroni-adjusted pairwise tests, alpha = 0.05). Shown only when the overall test is significant. Pairwise proportion tests are approximate when counts are small.",
+  "Selection criteria were asked as one multiple-choice question for breeding stock in general (not separately for males and females).",
+  "Prolificacy comes from the section on crossbred (metis) animals; 2 farms have no answer and are excluded from that row.",
+  sprintf("The questionnaire is worded for goats (chevres, boucs); %d of the %d farms keep only sheep, so check how those answers should be read.", n_sheep, n_all),
+  "Not available in the questionnaire: ethnoveterinary practices, age at first calving, number of calvings, selection practice by sex.")
+writeData(wb, OUTPUT_SHEET, data.frame(x = notes), startRow = nrow(table7) + 4, colNames = FALSE)
+for (nm in c("Not_tabulated", "Paper_row_mapping")) {
+  df_ <- if (nm == "Not_tabulated") not_tab else mapping
+  addWorksheet(wb, nm); writeData(wb, nm, df_, headerStyle = hs)
+  addStyle(wb, nm, bs, rows = 2:(nrow(df_) + 1), cols = seq_len(ncol(df_)), gridExpand = TRUE)
+  setColWidths(wb, nm, cols = seq_len(ncol(df_)), widths = c(55, 60, 80)[seq_len(ncol(df_))])
+}
+saveWorkbook(wb, OUTPUT_PATH, overwrite = TRUE)
+cat("\nSaved:", OUTPUT_PATH, "\n")

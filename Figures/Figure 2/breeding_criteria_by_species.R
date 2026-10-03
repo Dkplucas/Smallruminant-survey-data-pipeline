@@ -1,0 +1,131 @@
+# =============================================================================
+# Criteria used by farmers for selecting breeding stock, by species (goats vs sheep)
+# =============================================================================
+# What this script does:
+#   1. Reads the raw survey export (labels version)
+#   2. Excludes the training population (Abomey-Calavi + any blank-commune rows)
+#   3. Reconstructs the TRUE species classification from the raw Ovins/Caprins
+#      checkboxes (NOT the pre-derived "Espece de petit ruminants" field, which
+#      was found to be miscoded)
+#   4. Keeps only "Caprins only" (goats, n=60) and "Ovins only" (sheep, n=67)
+#      households
+#   5. Calculates, for each species, the % of respondents selecting each
+#      breeding-stock selection criterion (body size, disease resistance,
+#      past performance, genetic origin/breed, other)
+#   6. Produces a grouped horizontal bar chart (goats vs sheep) and saves it
+#      as a PNG, in the style of the reference paper's Figure 2
+#
+# NOTE: unlike the reference paper, this survey asks breeding-stock selection
+# criteria as a SINGLE question (not split by male vs female breeding animal),
+# so this figure compares species (goat vs sheep), not sex of the animal
+# being selected. State this clearly in your figure caption.
+#
+# Required packages: readxl, dplyr, tidyr, ggplot2, stringr
+# =============================================================================
+
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(stringr)
+
+# ---- File paths (edit these to match your local paths) --------------------
+LABELS_PATH <- "C:/Users/lucas/OneDrive/Bureau/Data/Figures/Figure 2/Questionnaire_caracterisation_pratiques_de_croisements_-_latest_version_-_labels_-_2026-07-28-03-29-08.xlsx"
+OUTPUT_PNG  <- "breeding_criteria_by_species.png"
+OUTPUT_XLSX <- "breeding_criteria_by_species.xlsx"
+
+# ---- Column name constants (exact headers from the raw export) ------------
+COMMUNE_COL <- "II- CARACTERISTIQUES DE L\u2019UNITE D\u2019ELEVAGE (UE) /Commune"
+OVINS_COL   <- "II- CARACTERISTIQUES DE L\u2019UNITE D\u2019ELEVAGE (UE) /Quelles sont les esp\u00e8ces animales que vous \u00e9levez?/1=Ovins"
+CAPRINS_COL <- "II- CARACTERISTIQUES DE L\u2019UNITE D\u2019ELEVAGE (UE) /Quelles sont les esp\u00e8ces animales que vous \u00e9levez?/2=Caprins"
+
+CRITERIA_COLS <- c(
+  "Body size"            = "5.) Reproduction/Crit\u00e8res de choix des reproducteurs /1= Taille corporelle",
+  "Disease resistance"   = "5.) Reproduction/Crit\u00e8res de choix des reproducteurs /2= R\u00e9sistance aux maladies",
+  "Past performance"     = "5.) Reproduction/Crit\u00e8res de choix des reproducteurs /3= Performances pass\u00e9es",
+  "Genetic origin/breed" = "5.) Reproduction/Crit\u00e8res de choix des reproducteurs /4= Origine g\u00e9n\u00e9tique (race)",
+  "Other"                = "5.) Reproduction/Crit\u00e8res de choix des reproducteurs /5= Autre"
+)
+
+# =============================================================================
+# 1. Read data
+# =============================================================================
+raw <- read_excel(LABELS_PATH, col_types = "text")
+
+# =============================================================================
+# 2. Exclude the training population (Abomey-Calavi + blank commune)
+# =============================================================================
+raw_clean <- raw %>%
+  filter(!is.na(.data[[COMMUNE_COL]]), .data[[COMMUNE_COL]] != "Abomey-Calavi")
+
+# =============================================================================
+# 3. Reconstruct species from the raw Ovins/Caprins checkboxes
+# =============================================================================
+raw_clean <- raw_clean %>%
+  mutate(
+    ovins_flag   = as.numeric(.data[[OVINS_COL]]),
+    caprins_flag = as.numeric(.data[[CAPRINS_COL]]),
+    species = case_when(
+      ovins_flag == 1 & caprins_flag == 0 ~ "Sheep (Ovins only)",
+      ovins_flag == 0 & caprins_flag == 1 ~ "Goats (Caprins only)",
+      ovins_flag == 1 & caprins_flag == 1 ~ "Mixed/Both",
+      TRUE ~ "Unknown"
+    )
+  )
+
+# =============================================================================
+# 4. Keep goats-only and sheep-only households
+# =============================================================================
+d <- raw_clean %>% filter(species %in% c("Goats (Caprins only)", "Sheep (Ovins only)"))
+cat("Goats:", sum(d$species == "Goats (Caprins only)"),
+    " | Sheep:", sum(d$species == "Sheep (Ovins only)"), "\n")
+
+# =============================================================================
+# 5. Calculate % of respondents per criterion, per species
+# =============================================================================
+for (crit in names(CRITERIA_COLS)) {
+  d[[crit]] <- as.numeric(d[[CRITERIA_COLS[[crit]]]])
+}
+
+criteria_pct <- d %>%
+  group_by(species) %>%
+  summarise(across(all_of(names(CRITERIA_COLS)), ~ mean(.x, na.rm = TRUE) * 100), n = n(),
+            .groups = "drop") %>%
+  pivot_longer(cols = all_of(names(CRITERIA_COLS)), names_to = "Criterion", values_to = "Percent")
+
+cat("\n===== % of respondents selecting each criterion =====\n")
+print(criteria_pct %>% select(species, Criterion, Percent) %>% arrange(Criterion, species))
+
+# =============================================================================
+# 6. Plot: grouped horizontal bar chart (style of reference paper's Figure 2)
+# =============================================================================
+criterion_order <- c("Other", "Genetic origin/breed", "Past performance",
+                      "Disease resistance", "Body size")
+criteria_pct$Criterion <- factor(criteria_pct$Criterion, levels = criterion_order)
+
+p <- ggplot(criteria_pct, aes(x = Criterion, y = Percent, fill = species)) +
+  geom_col(position = position_dodge(width = 0.75), width = 0.65) +
+  coord_flip() +
+  scale_fill_manual(values = c("Goats (Caprins only)" = "grey30",
+                                "Sheep (Ovins only)"   = "grey75")) +
+  labs(x = NULL, y = "% of respondents", fill = NULL,
+       title = "Criteria used by farmers for selecting breeding stock") +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "bottom")
+
+print(p)
+ggsave(OUTPUT_PNG, plot = p, width = 8, height = 5, dpi = 300)
+cat("\nSaved plot:", OUTPUT_PNG, "\n")
+
+# =============================================================================
+# 7. Export the underlying numbers to Excel for reference
+# =============================================================================
+if (requireNamespace("openxlsx", quietly = TRUE)) {
+  library(openxlsx)
+  wb <- createWorkbook()
+  addWorksheet(wb, "Criteria_by_species")
+  writeData(wb, "Criteria_by_species",
+            criteria_pct %>% select(species, Criterion, Percent, n) %>% arrange(Criterion, species))
+  saveWorkbook(wb, OUTPUT_XLSX, overwrite = TRUE)
+  cat("Saved data:", OUTPUT_XLSX, "\n")
+}
