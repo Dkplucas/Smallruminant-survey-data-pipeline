@@ -15,18 +15,25 @@ contingency tables, and permutation-based tests for quantitative variables.
 ```
 Data_cleaning/
    unite1cleaning.R ... unite7cleaning.R
-   Raw questionnaire, intermediate workbooks and the final data7.xlsx
+   Questionnaire file, intermediate workbooks and final data7.xlsx
+
+Figures/
+   Figure 1/ and Figure 2/
+   Questionnaire and supplementary figures
+
+Tables/
+   Output tables and summary results from analyses
 
 Test_CHI2/
-   Thematic folders containing chi-squared analysis scripts and Excel results
+   Thematic folders containing chi-squared analysis scripts and results
    data7.xlsx and zones.xlsx used by the analysis scripts
 
-Monte_Carlo/
-   Thematic folders containing Monte Carlo and permutation-test scripts
+Kruskal-Test/
+   Kruskal-Wallis and permutation-test scripts and results
    data7.xlsx and zones.xlsx used by the analysis scripts
 ```
 
-The thematic folders correspond to the questionnaire sections:
+The thematic folders in Test_CHI2/ and Kruskal-Test/ correspond to the questionnaire sections:
 
 1. Household-head identification
 2. Livestock-unit characteristics
@@ -110,18 +117,18 @@ setwd("path/to/Smallruminant-survey-data-pipeline/Test_CHI2/I.- IDENTIFICATION D
 source("chi2_education.R")
 ```
 
-### Monte Carlo and permutation tests
+### Kruskal-Wallis and permutation tests
 
-Use the scripts under `Monte_Carlo/` when a Monte Carlo analysis is required or
+Use the scripts under `Kruskal-Test/` when a Kruskal-Wallis analysis is required or
 when the outcome is quantitative. Depending on the variable, the scripts use
-Monte Carlo chi-squared tests, Kruskal-Wallis permutation tests, or permutation
-tests alongside Welch and Kruskal-Wallis sensitivity analyses.
+Kruskal-Wallis permutation tests, Monte Carlo chi-squared tests, or permutation
+tests alongside Welch sensitivity analyses.
 
 Example:
 
 ```r
-setwd("path/to/Smallruminant-survey-data-pipeline/Monte_Carlo/I.- IDENTIFICATION DU CHEF DE MENAGE")
-source("monte_carlo_age_zone.R")
+setwd("path/to/Smallruminant-survey-data-pipeline/Kruskal-Test/I.- IDENTIFICATION DU CHEF DE MENAGE")
+source("kruskal_age_zone.R")
 ```
 
 Simulation counts, significance level and random seeds are defined near the top
